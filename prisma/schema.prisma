@@ -1,0 +1,141 @@
+// GLYPH — Futuristic multiplayer Wordle platform
+// Prisma schema (SQLite)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---- Players & Profiles ----
+
+model Player {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  avatarSeed   String   @default("glyph")
+  xp           Int      @default(0)
+  level        Int      @default(1)
+  rankPoints   Int      @default(0)
+  // presence (transient, mirrored to DB for cross-tab demo)
+  status       String   @default("offline") // online | idle | playing | offline
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  profile      PlayerProfile?
+  games        Game[]
+  achievements Achievement[]
+  streakFreezes StreakFreeze[]
+  sentFriends  Friendship[]  @relation("FriendshipSender")
+  receivedFriends Friendship[] @relation("FriendshipReceiver")
+}
+
+model PlayerProfile {
+  playerId        String   @id
+  player          Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  currentStreak   Int      @default(0)
+  longestStreak   Int      @default(0)
+  challengeStreak Int      @default(0)
+  winStreak       Int      @default(0)
+  totalGames      Int      @default(0)
+  wins            Int      @default(0)
+  losses          Int      @default(0)
+  draws           Int      @default(0)
+  totalGuesses    Int      @default(0)
+  totalDurationMs Int      @default(0)
+  bestTimeMs      Int?
+  // guess distribution buckets (1..6)
+  dist1           Int      @default(0)
+  dist2           Int      @default(0)
+  dist3           Int      @default(0)
+  dist4           Int      @default(0)
+  dist5           Int      @default(0)
+  dist6           Int      @default(0)
+  // duel-specific
+  duelWins        Int      @default(0)
+  duelLosses      Int      @default(0)
+  updatedAt       DateTime @updatedAt
+}
+
+model StreakFreeze {
+  id        String   @id @default(cuid())
+  playerId  String   @unique
+  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  count     Int      @default(2)
+  updatedAt DateTime @updatedAt
+}
+
+// ---- Daily challenges ----
+
+model DailyChallenge {
+  id        String   @id @default(cuid())
+  date      String   @unique // YYYY-MM-DD
+  word      String
+  type      String   @default("normal") // normal | challenge | hardcore
+  rewardXp  Int      @default(100)
+  // aggregate global stats
+  totalPlays     Int @default(0)
+  totalWins      Int @default(0)
+  totalGuessSum  Int @default(0)
+  createdAt DateTime @default(now())
+}
+
+// ---- Games & Guesses ----
+
+model Game {
+  id          String   @id @default(cuid())
+  playerId    String
+  player      Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  mode        String   // classic | practice | duel | party | challenge
+  wordLength  Int      @default(5)
+  // we never expose the raw word to the client during play; we only store it for replay
+  word        String
+  won         Boolean  @default(false)
+  guessesUsed Int      @default(0)
+  durationMs  Int      @default(0)
+  isDaily     Boolean  @default(false)
+  dailyDate   String?
+  roomId      String?
+  opponentName String?
+  xpEarned    Int      @default(0)
+  completedAt DateTime @default(now())
+
+  guesses     Guess[]
+}
+
+model Guess {
+  id        String   @id @default(cuid())
+  gameId    String
+  game      Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  text      String
+  // color pattern as string of c/p/a (correct/present/absent)
+  result    String
+  attempt   Int
+  createdAt DateTime @default(now())
+}
+
+// ---- Achievements ----
+
+model Achievement {
+  id        String   @id @default(cuid())
+  playerId  String
+  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  type      String   // first_win | streak_7 | streak_30 | streak_100 | speed_demon | sharpshooter | comeback | duel_master | challenge_champ ...
+  unlockedAt DateTime @default(now())
+  @@unique([playerId, type])
+}
+
+// ---- Friends ----
+
+model Friendship {
+  id        String   @id @default(cuid())
+  senderId  String
+  sender    Player   @relation("FriendshipSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver  Player   @relation("FriendshipReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  status    String   @default("pending") // pending | accepted
+  createdAt DateTime @default(now())
+  @@unique([senderId, receiverId])
+}
