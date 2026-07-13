@@ -5,9 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "bun --hot index.ts",
-    "start": "bun index.ts"
+    "start": "bun index.ts",
+    "start:node": "node --experimental-strip-types index.ts"
   },
   "dependencies": {
     "socket.io": "^4"
+  },
+  "devDependencies": {},
+  "engines": {
+    "bun": ">=1.0.0",
+    "node": ">=22.0.0"
   }
 }
