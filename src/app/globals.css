@@ -297,3 +297,15 @@
   to { transform: rotate(360deg); }
 }
 .animate-spin-slow { animation: spin-slow 8s linear infinite; }
+
+
+/* --- Mobile in-game (duel/party) --- */
+@media (max-width: 1023px) {
+  /* stop rubber-band scroll fighting the sticky keyboard */
+  .game-viewport {
+    min-height: 100dvh;
+    overscroll-behavior-y: contain;
+  }
+}
+/* larger invisible hit area on keyboard keys without visual bloat */
+.touch-manipulation button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }

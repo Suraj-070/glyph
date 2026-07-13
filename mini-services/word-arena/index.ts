@@ -112,7 +112,7 @@ interface PresenceUpdatePayload {
 
 // ---------- Constants ----------
 
-const PORT = 3003
+const PORT = Number(process.env.ARENA_PORT || 3003)
 const ROOM_CODE_LENGTH = 6
 const MAX_PLAYERS_DUEL = 2
 const MAX_CHAT_LENGTH = 200
@@ -131,6 +131,18 @@ const VALID_TILE_STATUSES: TileStatus[] = ['correct', 'present', 'absent']
 
 const players = new Map<string, Player>() // socketId → Player
 const rooms = new Map<string, Room>() // roomId → Room
+
+// Reconnect grace: playing-room disconnects get 30s to come back before forfeit.
+const RECONNECT_GRACE_MS = 30_000
+interface PendingReconnect {
+  playerId: string
+  name: string
+  avatarSeed: string
+  roomId: string
+  oldSocketId: string
+  timer: ReturnType<typeof setTimeout>
+}
+const pendingReconnects = new Map<string, PendingReconnect>() // playerId → pending
 
 // ---------- Helpers ----------
 
@@ -246,9 +258,9 @@ function emitError(socket: Socket, message: string): void {
 
 const httpServer = createServer()
 const io = new Server(httpServer, {
-  // Caddy forwards to this service; path MUST be "/" — the frontend connects
-  // with io("/?XTransformPort=3003")
-  path: '/',
+  // Standard socket.io path. Frontend connects via NEXT_PUBLIC_ARENA_URL
+  // (defaults to http://localhost:3003 in dev).
+  path: '/socket.io',
   cors: {
     origin: '*',
     methods: ['GET', 'POST'],
@@ -263,7 +275,7 @@ io.on('connection', (socket: Socket) => {
   log(`connected: ${socket.id}`)
 
   // ----- player:identify -----
-  socket.on('player:identify', (data: PlayerIdentifyPayload) => {
+  socket.on('player:identify', (data: PlayerIdentifyPayload, ack?: () => void) => {
     try {
       if (!data || typeof data.id !== 'string' || typeof data.name !== 'string') {
         throw new Error('Invalid identify payload')
@@ -284,6 +296,7 @@ io.on('connection', (socket: Socket) => {
       })
       log(`identified: ${data.name} (${data.id})`)
       socket.emit('player:ready', { id: data.id })
+      if (typeof ack === 'function') ack()  // client ack: safe to create/join
     } catch (err) {
       emitError(socket, errMsg(err, 'identify'))
       logError(`player:identify error: ${errMsg(err)}`)
@@ -623,6 +636,47 @@ io.on('connection', (socket: Socket) => {
     }
   })
 
+  // ----- room:rejoin (reconnect within grace) -----
+  socket.on('room:rejoin', (data: { roomId?: string; playerId?: string }) => {
+    try {
+      if (!data || typeof data.roomId !== 'string' || typeof data.playerId !== 'string') {
+        throw new Error('Invalid room:rejoin payload')
+      }
+      const pending = pendingReconnects.get(data.playerId)
+      const room = rooms.get(data.roomId)
+      if (!pending || pending.roomId !== data.roomId || !room) {
+        socket.emit('room:rejoin-failed', { roomId: data.roomId })
+        return
+      }
+      clearTimeout(pending.timer)
+      pendingReconnects.delete(data.playerId)
+
+      // Swap the old socket id for the new one everywhere
+      room.players = room.players.map((id) => (id === pending.oldSocketId ? socket.id : id))
+      if (room.hostId === pending.oldSocketId) room.hostId = socket.id
+      if (room.finishedPlayers.has(pending.oldSocketId)) {
+        room.finishedPlayers.delete(pending.oldSocketId)
+        room.finishedPlayers.add(socket.id)
+      }
+      players.delete(pending.oldSocketId)
+      players.set(socket.id, {
+        id: pending.playerId,
+        name: pending.name,
+        avatarSeed: pending.avatarSeed,
+        status: 'playing',
+        roomId: data.roomId,
+      })
+      socket.join(data.roomId)
+      socket.emit('room:rejoined', { roomId: data.roomId })
+      io.to(data.roomId).emit('player:reconnected', { id: pending.playerId, name: pending.name })
+      emitRoomState(data.roomId)
+      log(`rejoined: ${pending.name} back in room ${data.roomId}`)
+    } catch (err) {
+      emitError(socket, errMsg(err, 'room:rejoin'))
+      logError(`room:rejoin error: ${errMsg(err)}`)
+    }
+  })
+
   // ----- disconnect -----
   socket.on('disconnect', () => {
     try {
@@ -635,11 +689,35 @@ io.on('connection', (socket: Socket) => {
       // Remove from any room
       if (player.roomId) {
         const roomId = player.roomId
-        // socket.leave is automatic on disconnect, but call for clarity
+        const room = rooms.get(roomId)
         socket.leave(roomId)
-        removePlayerFromRoom(socket.id, roomId, 'disconnect')
-        // Notify remaining room occupants
-        io.to(roomId).emit('player:left', { id: player.id, name: player.name })
+        if (room && room.state === 'playing') {
+          // GRACE: keep the seat 30s — refresh / network blip shouldn't forfeit
+          const pending: PendingReconnect = {
+            playerId: player.id,
+            name: player.name,
+            avatarSeed: player.avatarSeed,
+            roomId,
+            oldSocketId: socket.id,
+            timer: setTimeout(() => {
+              pendingReconnects.delete(player.id)
+              removePlayerFromRoom(socket.id, roomId, 'disconnect')
+              io.to(roomId).emit('player:left', { id: player.id, name: player.name })
+              io.to(roomId).emit('duel:opponent-forfeit', { id: player.id, name: player.name })
+              log(`grace expired: ${player.name} forfeits room ${roomId}`)
+            }, RECONNECT_GRACE_MS),
+          }
+          pendingReconnects.set(player.id, pending)
+          io.to(roomId).emit('player:disconnected', {
+            id: player.id,
+            name: player.name,
+            graceMs: RECONNECT_GRACE_MS,
+          })
+          log(`grace started: ${player.name} has ${RECONNECT_GRACE_MS / 1000}s to rejoin ${roomId}`)
+        } else {
+          removePlayerFromRoom(socket.id, roomId, 'disconnect')
+          io.to(roomId).emit('player:left', { id: player.id, name: player.name })
+        }
       }
       // Global presence → offline
       io.emit('presence:changed', {

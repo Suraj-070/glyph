@@ -1,9 +1,9 @@
-// POST /api/words/validate — server-authoritative guess evaluation.
-// Body: { seed, guess, attempt }
-// Returns: { statuses, guess, won, finished, word?(only when finished) }
-// The secret word is NEVER sent while the game is still in progress.
+// POST /api/words/validate — STATELESS server-authoritative guess evaluation.
+// Body: { token, guess }
+// ZERO database queries: session state travels in an encrypted, HMAC-signed
+// token. Response includes the next token. Word never readable client-side.
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/word-session";
+import { verifyGameToken, signGameToken } from "@/lib/game-token";
 import { evaluateGuess, statusesToString } from "@/lib/game";
 import { isValidWord } from "@/lib/words";
 import type { TileStatus } from "@/lib/types";
@@ -11,33 +11,34 @@ import type { TileStatus } from "@/lib/types";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  let body: { seed?: string; guess?: string; attempt?: number } = {};
+  let body: { token?: string; guess?: string } = {};
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-  const seed = (body.seed || "").toString().trim();
   const guess = (body.guess || "").toString().trim().toUpperCase();
-  const attempt = Number(body.attempt) || 0;
+  const state = verifyGameToken((body.token || "").toString());
 
-  const session = getSession(seed);
-  if (!session) {
+  if (!state) {
     return NextResponse.json({ error: "Invalid or expired session" }, { status: 404 });
+  }
+  if (state.finished) {
+    return NextResponse.json({ error: "Game already finished" }, { status: 409 });
   }
   if (guess.length !== 5 || !/^[A-Z]+$/.test(guess)) {
     return NextResponse.json({ error: "Guess must be 5 letters" }, { status: 400 });
   }
   if (!isValidWord(guess)) {
-    return NextResponse.json(
-      { error: "Not in word list", invalid: true },
-      { status: 422 }
-    );
+    return NextResponse.json({ error: "Not in word list", invalid: true }, { status: 422 });
   }
 
-  const result = evaluateGuess(guess, session.word);
-  const won = result.guess === session.word;
-  const finished = won || attempt >= session.maxGuesses;
+  const result = evaluateGuess(guess, state.word);
+  const won = result.guess === state.word.toUpperCase();
+  const guessesUsed = state.guessesUsed + 1;
+  const finished = won || guessesUsed >= state.maxGuesses;
+
+  const next = signGameToken({ ...state, guessesUsed, won, finished });
 
   const payload: {
     statuses: TileStatus[];
@@ -45,6 +46,8 @@ export async function POST(req: Request) {
     result: string;
     won: boolean;
     finished: boolean;
+    attempt: number;
+    token: string;
     word?: string;
   } = {
     statuses: result.statuses,
@@ -52,12 +55,10 @@ export async function POST(req: Request) {
     result: statusesToString(result.statuses),
     won,
     finished,
+    attempt: guessesUsed,
+    token: next,
   };
-
-  // Only reveal the word when the game is definitively over.
-  if (finished) {
-    payload.word = session.word;
-  }
+  if (finished) payload.word = state.word;
 
   return NextResponse.json(payload);
 }

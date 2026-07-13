@@ -22,6 +22,7 @@ import { StatCard } from "@/components/common/stat-card";
 import { achievementLabel } from "@/components/game/result-modal";
 import { useGlyph } from "@/lib/store";
 import { api, formatDuration, formatTime } from "@/lib/api";
+import { useCachedApi, invalidateCache } from "@/lib/use-cached-api";
 import { rankForPoints, RANKS } from "@/lib/types";
 
 interface ProfileData {
@@ -93,16 +94,24 @@ const ALL_ACHIEVEMENTS = [
 
 export function ProfileView({ player, statsNonce }: ProfileViewProps) {
   const setView = useGlyph((s) => s.setView);
-  const [data, setData] = useState<ProfileData | null>(null);
+  const { data: cached, refresh } = useCachedApi<ProfileData>("/api/stats");
+  const data = cached;
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
 
   useEffect(() => {
-    api<ProfileData>("/api/stats").then((d) => {
-      setData(d);
-      setName(d.player.username);
-    });
-  }, [statsNonce]);
+    if (statsNonce > 0) {
+      invalidateCache("/api/stats");
+      void refresh(true);
+    }
+  }, [statsNonce, refresh]);
+
+  // sync editable name when fresh data arrives — state-adjust-during-render
+  const [lastUsername, setLastUsername] = useState<string | undefined>(undefined);
+  if (cached?.player?.username && cached.player.username !== lastUsername) {
+    setLastUsername(cached.player.username);
+    setName(cached.player.username);
+  }
 
   if (!data) {
     return (

@@ -24,7 +24,7 @@ function keyClass(status: TileStatus | undefined): string {
 
 export function WordleKeyboard({ onKey, keyStates, disabled }: WordleKeyboardProps) {
   return (
-    <div className="flex flex-col gap-1.5 w-full max-w-lg mx-auto select-none">
+    <div className="flex flex-col gap-1 sm:gap-1.5 w-full max-w-lg mx-auto select-none touch-manipulation px-0.5">
       {ROWS.map((row, ri) => (
         <div key={ri} className="flex gap-1.5 justify-center">
           {row.map((k) => {
@@ -35,10 +35,13 @@ export function WordleKeyboard({ onKey, keyStates, disabled }: WordleKeyboardPro
                 key={k}
                 type="button"
                 disabled={disabled}
-                onClick={() => onKey(k)}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  if (!disabled) onKey(k);
+                }}
                 className={classNames(
-                  "h-11 sm:h-12 rounded-md border font-semibold uppercase text-sm transition-all active:scale-95",
-                  isAction ? "px-3 text-xs flex-1 sm:flex-none sm:px-4" : "flex-1 max-w-[44px]",
+                  "h-12 sm:h-12 rounded-md border font-semibold uppercase text-sm active:scale-95 active:bg-white/15 transition-transform duration-75",
+                  isAction ? "px-2 text-xs flex-[1.4] sm:flex-none sm:px-4" : "flex-1 max-w-[44px]",
                   keyClass(st),
                   disabled && "opacity-50 cursor-not-allowed"
                 )}

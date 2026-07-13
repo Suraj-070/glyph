@@ -106,14 +106,19 @@ export async function grantAchievements(
   return unlocked;
 }
 
-/** Recompute & persist player level from xp. */
-export async function syncPlayerLevel(playerId: string): Promise<void> {
-  const p = await db.player.findUnique({ where: { id: playerId } });
-  if (!p) return;
+/** Recompute & persist player level from xp. Returns fresh player snapshot. */
+export async function syncPlayerLevel(playerId: string) {
+  const p = await db.player.findUnique({
+    where: { id: playerId },
+    select: { xp: true, level: true, rankPoints: true },
+  });
+  if (!p) return null;
   const level = levelForXp(p.xp);
   if (level !== p.level) {
     await db.player.update({ where: { id: playerId }, data: { level } });
+    return { ...p, level };
   }
+  return p;
 }
 
 /** Aggregate profile stats: avg guesses, win rate, etc. (computed from profile counters) */

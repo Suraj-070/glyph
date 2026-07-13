@@ -12,13 +12,20 @@ import { GameTimer } from "@/components/game/game-timer";
 import { useWordleGame, type GameEndResult } from "@/hooks/use-wordle-game";
 import { useGlyph } from "@/lib/store";
 import { api } from "@/lib/api";
+import {
+  saveSnapshot,
+  loadSnapshot,
+  clearSnapshot,
+  queueSubmit,
+} from "@/lib/game-persist";
+import type { GuessResult } from "@/hooks/use-wordle-game";
 
 interface SinglePlayerGameProps {
   mode: "classic" | "practice";
 }
 
 interface SessionInfo {
-  seed: string;
+  token: string;
   maxGuesses: number;
   dailyType?: string;
   dailyDate?: string;
@@ -31,6 +38,8 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
   const setView = useGlyph((s) => s.setView);
   const bumpStats = useGlyph((s) => s.bumpStats);
   const [session, setSession] = useState<SessionInfo | null>(null);
+  const [resume, setResume] = useState<{ token: string; guesses: GuessResult[]; startedAt?: number } | null>(null);
+  const [expired, setExpired] = useState(false);
   const [loading, setLoading] = useState(true);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [result, setResult] = useState<{
@@ -44,12 +53,52 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
     currentStreak?: number;
     unlocked: string[];
     alreadyPlayed?: boolean;
+    pendingSync?: boolean;
   } | null>(null);
 
-  const fetchSession = useCallback(async () => {
+  const fetchSession = useCallback(async (forceNew = false) => {
     setLoading(true);
     setResult(null);
+    setExpired(false);
     try {
+      // refresh-proof: resume an in-progress game from this browser session
+      if (!forceNew) {
+        const snap = loadSnapshot(mode);
+        if (snap && snap.guesses.length > 0 && snap.guesses.length < snap.maxGuesses) {
+          setResume({ token: snap.token, guesses: snap.guesses, startedAt: snap.startedAt });
+          setSession({
+            token: snap.token,
+            maxGuesses: snap.maxGuesses,
+            dailyDate: snap.dailyDate,
+          });
+          setStartedAt(snap.startedAt);
+          setLoading(false);
+          return;
+        }
+      }
+      clearSnapshot(mode);
+      setResume(null);
+      if (mode === "classic") {
+        // fairness: already finished today's daily -> show result, no replay board
+        const ds = await api<{ played: boolean; won: boolean; guessesUsed: number; word: string | null; xpEarned: number }>(
+          "/api/game/daily-status"
+        ).catch(() => null);
+        if (ds?.played) {
+          setResult({
+            open: true,
+            won: ds.won,
+            word: ds.word ?? "",
+            guessesUsed: ds.guessesUsed,
+            durationMs: 0,
+            xpEarned: ds.xpEarned,
+            unlocked: [],
+            alreadyPlayed: true,
+          });
+          setSession(null);
+          setLoading(false);
+          return;
+        }
+      }
       const endpoint = mode === "classic" ? "/api/words/daily" : "/api/words/practice";
       const info = await api<SessionInfo>(endpoint);
       setSession(info);
@@ -67,6 +116,14 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
 
   const onGameEnd = useCallback(
     async (r: GameEndResult) => {
+      clearSnapshot(mode);
+      const guessesPayload = r.guesses.map((g, i) => ({
+        text: g.guess,
+        result: g.statuses
+          .map((s) => (s === "correct" ? "c" : s === "present" ? "p" : "a"))
+          .join(""),
+        attempt: i + 1,
+      }));
       try {
         const res = await api<{
           won: boolean;
@@ -79,18 +136,12 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
         }>("/api/game/submit", {
           method: "POST",
           body: JSON.stringify({
-            seed: session?.seed,
+            token: game.getToken(),
             mode,
             guessesUsed: r.guessesUsed,
             won: r.won,
             durationMs: r.durationMs,
-            guesses: r.guesses.map((g, i) => ({
-              text: g.guess,
-              result: g.statuses
-                .map((s) => (s === "correct" ? "c" : s === "present" ? "p" : "a"))
-                .join(""),
-              attempt: i + 1,
-            })),
+            guesses: guessesPayload,
           }),
         });
         setResult({
@@ -106,7 +157,14 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
           alreadyPlayed: res.alreadyPlayed,
         });
         bumpStats();
-      } catch {
+      } catch (e) {
+        // offline / server hiccup: queue it — XP syncs automatically later,
+        // server-side seed dedupe makes retries safe
+        const httpStatus = (e as Error & { status?: number }).status;
+        if (httpStatus === undefined) {
+          const t = game.getToken();
+          if (t) queueSubmit({ token: t, mode, guesses: guessesPayload });
+        }
         setResult({
           open: true,
           won: r.won,
@@ -114,6 +172,7 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
           guessesUsed: r.guessesUsed,
           durationMs: r.durationMs,
           unlocked: [],
+          pendingSync: httpStatus === undefined,
         });
       }
     },
@@ -121,18 +180,48 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
   );
 
   const game = useWordleGame({
-    seed: session?.seed ?? null,
+    seed: session?.token ?? null,
+    resume,
     maxGuesses: session?.maxGuesses ?? 6,
     mode,
     onGameEnd,
+    onSessionExpired: () => setExpired(true),
+    onGuessFinalized: (_g, _attempt, _won, finished) => {
+      // refresh-proof snapshot after every revealed guess
+      if (finished) {
+        clearSnapshot(mode);
+        return;
+      }
+      const t = game.getToken();
+      if (t && session) {
+        saveSnapshot(mode, {
+          token: t,
+          guesses: [...game.guesses, _g],
+          startedAt: startedAt ?? Date.now(),
+          maxGuesses: session.maxGuesses,
+          dailyDate: session.dailyDate,
+        });
+      }
+    },
   });
 
   const closeResult = () => {
     setResult((r) => (r ? { ...r, open: false } : null));
     if (mode === "practice") {
-      fetchSession();
+      fetchSession(true);
     }
   };
+
+  if (expired) {
+    return (
+      <div className="px-6 py-24 text-center space-y-4">
+        <p className="text-sm text-muted-foreground">
+          This game session expired. Start a fresh one?
+        </p>
+        <Button onClick={() => fetchSession(true)}>New game</Button>
+      </div>
+    );
+  }
 
   const share = () => {
     if (!result || !session) return;
@@ -239,7 +328,7 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
 
           {mode === "practice" && game.status === "playing" ? (
             <div className="w-full max-w-lg">
-              <PracticeHints seed={session.seed} />
+              <PracticeHints token={session.token} />
             </div>
           ) : null}
         </div>
@@ -290,6 +379,7 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
         rankDelta={result?.rankDelta}
         currentStreak={result?.currentStreak}
         unlockedAchievements={result?.unlocked}
+        pendingSync={result?.pendingSync}
         onClose={closeResult}
         onShare={share}
         showAi
@@ -309,7 +399,7 @@ function Row({ label, value, accent }: { label: string; value: string; accent?: 
   );
 }
 
-function PracticeHints({ seed }: { seed: string }) {
+function PracticeHints({ token }: { token: string }) {
   // hint panel needs the secret word, which only the server knows.
   // We provide a button that reveals a hint via /api/ai/hint — but hint needs the word.
   // For practice, expose a lightweight endpoint to get the word ONLY when game is practice + hint requested.
@@ -323,7 +413,7 @@ function PracticeHints({ seed }: { seed: string }) {
       // get the practice word (practice-only reveal)
       const w = await api<{ word: string }>("/api/words/practice/reveal", {
         method: "POST",
-        body: JSON.stringify({ seed }),
+        body: JSON.stringify({ token }),
       });
       const res = await api<{ level: number; hint: string }>("/api/ai/hint", {
         method: "POST",

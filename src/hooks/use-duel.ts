@@ -38,6 +38,11 @@ interface DuelState {
   messages: ChatMessage[];
   reactions: Reaction[];
   presenceError: string | null;
+  /** epoch ms until which the opponent may reconnect; null = connected */
+  opponentGraceUntil: number | null;
+  /** opponent abandoned — treated as a win for us */
+  opponentForfeited: boolean;
+  isHost: boolean;
 }
 
 const BOT_NAMES = [
@@ -102,6 +107,47 @@ function botGuessPattern(
   return { statuses, correctCount: correct };
 }
 
+function systemMsg(content: string): ChatMessage {
+  return {
+    id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: "System",
+    avatarSeed: "system",
+    content,
+    type: "system",
+    ts: Date.now(),
+  };
+}
+
+// --- duel session persistence (refresh-proof, sessionStorage) ---
+const DUEL_SESSION_KEY = "glyph-duel-session";
+interface DuelSessionSnapshot {
+  roomId: string;
+  playerId: string;
+  savedAt: number;
+}
+function saveDuelSession(snap: Omit<DuelSessionSnapshot, "savedAt">): void {
+  try {
+    sessionStorage.setItem(DUEL_SESSION_KEY, JSON.stringify({ ...snap, savedAt: Date.now() }));
+  } catch { /* */ }
+}
+function loadDuelSession(): DuelSessionSnapshot | null {
+  try {
+    const raw = sessionStorage.getItem(DUEL_SESSION_KEY);
+    if (!raw) return null;
+    const snap = JSON.parse(raw) as DuelSessionSnapshot;
+    if (Date.now() - snap.savedAt > 60_000) {
+      clearDuelSession();
+      return null;
+    }
+    return snap;
+  } catch {
+    return null;
+  }
+}
+function clearDuelSession(): void {
+  try { sessionStorage.removeItem(DUEL_SESSION_KEY); } catch { /* */ }
+}
+
 export function useDuel({ player }: UseDuelOptions) {
   const [state, setState] = useState<DuelState>({
     phase: "lobby",
@@ -114,9 +160,15 @@ export function useDuel({ player }: UseDuelOptions) {
     messages: [],
     reactions: [],
     presenceError: null,
+    opponentGraceUntil: null,
+    opponentForfeited: false,
+    isHost: false,
   });
 
   const socketRef = useRef<Socket | null>(null);
+  const roomCodeRef = useRef<string | null>(null);
+  const identifiedRef = useRef(false);
+  const pendingRoomActionRef = useRef<(() => void) | null>(null);
   const botTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const botStateRef = useRef<{
     attempt: number;
@@ -126,6 +178,19 @@ export function useDuel({ player }: UseDuelOptions) {
     name: string;
     seed: string;
   } | null>(null);
+
+  useEffect(() => {
+    roomCodeRef.current = state.roomCode;
+    // heartbeat: refresh saved duel session while a PvP match is live
+    if (state.phase === "playing" && state.mode === "online" && state.roomCode && player) {
+      saveDuelSession({ roomId: state.roomCode, playerId: player.id });
+      const t = setInterval(
+        () => saveDuelSession({ roomId: state.roomCode!, playerId: player.id }),
+        15_000
+      );
+      return () => clearInterval(t);
+    }
+  }, [state.phase, state.mode, state.roomCode, player]);
 
   const pushMessage = useCallback((m: ChatMessage) => {
     setState((s) => ({ ...s, messages: [...s.messages, m].slice(-50) }));
@@ -138,9 +203,20 @@ export function useDuel({ player }: UseDuelOptions) {
     }, 4000);
   }, []);
 
+  // stable refs so ensureSocket never re-creates the socket due to stale deps
+  const pushMessageRef = useRef(pushMessage);
+  const pushReactionRef = useRef(pushReaction);
+  const playerRef = useRef(player);
+  useEffect(() => {
+    pushMessageRef.current = pushMessage;
+    pushReactionRef.current = pushReaction;
+    playerRef.current = player;
+  });
+
   const ensureSocket = useCallback(() => {
     if (socketRef.current) return socketRef.current;
-    const sock = io("/?XTransformPort=3003", {
+    const url = process.env.NEXT_PUBLIC_ARENA_URL || "http://localhost:3003";
+    const sock = io(url, {
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: 5,
@@ -149,16 +225,77 @@ export function useDuel({ player }: UseDuelOptions) {
       setState((s) => ({ ...s, presenceError: "Realtime service unavailable. Bot mode still works." }));
     });
     sock.on("connect", () => {
-      if (player) {
-        sock.emit("player:identify", {
-          id: player.id,
-          name: player.username,
-          avatarSeed: player.avatarSeed,
-        });
+      identifiedRef.current = false;
+      const p = playerRef.current;
+      if (p) {
+        sock.emit(
+          "player:identify",
+          { id: p.id, name: p.username, avatarSeed: p.avatarSeed },
+          () => {
+            // server ack: now safe to create/join rooms
+            identifiedRef.current = true;
+            const pending = pendingRoomActionRef.current;
+            if (pending) {
+              pendingRoomActionRef.current = null;
+              pending();
+            }
+            // refresh / network-drop recovery: rejoin an in-flight match
+            const saved = loadDuelSession();
+            if (saved && saved.playerId === p.id) {
+              sock.emit("room:rejoin", { roomId: saved.roomId, playerId: p.id });
+            }
+          }
+        );
       }
     });
-    sock.on("chat:message", (m: ChatMessage) => pushMessage(m));
-    sock.on("room:reaction", (r: Reaction) => pushReaction(r));
+    sock.on("chat:message", (m: ChatMessage) => pushMessageRef.current(m));
+    sock.on("room:reaction", (r: Reaction) => pushReactionRef.current(r));
+    // --- Phase 2 fairness: disconnect grace / reconnect / forfeit ---
+    sock.on("player:disconnected", (p: { id: string; name: string; graceMs: number }) => {
+      setState((s) => ({ ...s, opponentGraceUntil: Date.now() + p.graceMs }));
+      pushMessageRef.current(systemMsg(`${p.name} disconnected — waiting ${Math.round(p.graceMs / 1000)}s…`));
+    });
+    sock.on("player:reconnected", (p: { id: string; name: string }) => {
+      setState((s) => ({ ...s, opponentGraceUntil: null }));
+      pushMessageRef.current(systemMsg(`${p.name} reconnected`));
+    });
+    sock.on("duel:opponent-forfeit", (p: { id: string; name: string }) => {
+      setState((s) => ({
+        ...s,
+        opponentGraceUntil: null,
+        opponentForfeited: true,
+        opponent: s.opponent ? { ...s.opponent, lost: true } : s.opponent,
+      }));
+      pushMessageRef.current(systemMsg(`${p.name} abandoned the match — you win!`));
+    });
+    sock.on("room:rejoined", () => {
+      pushMessageRef.current(systemMsg("Reconnected to the match"));
+    });
+    sock.on("room:rejoin-failed", () => {
+      clearDuelSession();
+    });
+    sock.on("room:joined", ({ roomId }: { roomId: string }) => {
+      // only update state for the joiner (creator already has roomCode + isHost)
+      setState((s) => s.isHost ? s : ({ ...s, roomCode: roomId, phase: "waiting", mode: "online", isHost: false }));
+    });
+
+    sock.on("error", ({ message }: { message: string }) => {
+      setState((s) => ({ ...s, presenceError: message, phase: "lobby", roomCode: null }));
+      pushMessageRef.current(systemMsg(`Error: ${message}`));
+    });
+
+    sock.on("room:created", ({ roomId }: { roomId: string }) => {
+      setState((s) => ({ ...s, roomCode: roomId, isHost: true }));
+      pushMessageRef.current({
+        id: Math.random().toString(36).slice(2),
+        name: "System",
+        avatarSeed: "glyph",
+        content: `Room ${roomId} created. Share this code with a friend.`,
+        type: "system",
+        ts: Date.now(),
+      });
+    });
+
     sock.on("room:state", (rs: { id: string; players: Array<{ id: string; name: string; avatarSeed: string }>; state: string }) => {
       const others = rs.players.filter((p) => p.id !== socketRef.current?.id);
       if (others.length > 0) {
@@ -182,16 +319,21 @@ export function useDuel({ player }: UseDuelOptions) {
       }
     });
     sock.on("game:started", async (payload: { wordSeed: string; matchStartedAt: number; maxGuesses: number }) => {
+      if (playerRef.current) {
+        // room code known from state at call time via ref below
+        const rc = roomCodeRef.current;
+        if (rc) saveDuelSession({ roomId: rc, playerId: playerRef.current!.id });
+      }
       // fetch the shared duel word session
       try {
-        const sess = await api<{ seed: string; maxGuesses: number }>("/api/words/duel", {
+        const session = await api<{ token: string; maxGuesses: number }>("/api/words/duel", {
           method: "POST",
           body: JSON.stringify({ wordSeed: payload.wordSeed }),
         });
         setState((s) => ({
           ...s,
           phase: "playing",
-          duelSeed: sess.seed,
+          duelSeed: session.token,
           matchStartedAt: payload.matchStartedAt,
           maxGuesses: payload.maxGuesses,
           opponent: s.opponent
@@ -239,7 +381,7 @@ export function useDuel({ player }: UseDuelOptions) {
     });
     socketRef.current = sock;
     return sock;
-  }, [player, pushMessage, pushReaction]);
+  }, []);  // intentionally empty — stable socket, uses refs internally
 
   // ---- Bot mode ----
   const startBotLoop = useCallback(() => {
@@ -333,7 +475,7 @@ export function useDuel({ player }: UseDuelOptions) {
     if (!player) return;
     const wordSeed = genWordSeed();
     try {
-      const sess = await api<{ seed: string; maxGuesses: number }>("/api/words/duel", {
+      const session = await api<{ token: string; maxGuesses: number }>("/api/words/duel", {
         method: "POST",
         body: JSON.stringify({ wordSeed }),
       });
@@ -342,9 +484,9 @@ export function useDuel({ player }: UseDuelOptions) {
         phase: "playing",
         mode: "bot",
         roomCode: null,
-        duelSeed: sess.seed,
+        duelSeed: session.token,
         matchStartedAt: Date.now(),
-        maxGuesses: sess.maxGuesses,
+        maxGuesses: session.maxGuesses,
         messages: [],
         reactions: [],
         presenceError: null,
@@ -367,26 +509,27 @@ export function useDuel({ player }: UseDuelOptions) {
   const createRoom = useCallback(async () => {
     if (!player) return;
     const sock = ensureSocket();
-    const code = genRoomCode();
     setState((s) => ({
       ...s,
       phase: "waiting",
       mode: "online",
-      roomCode: code,
+      roomCode: null,
       messages: [],
       reactions: [],
       presenceError: null,
     }));
-    sock.emit("room:create", { name: player.username, avatarSeed: player.avatarSeed, playerId: player.id });
-    pushMessage({
-      id: Math.random().toString(36).slice(2),
-      name: "System",
-      avatarSeed: "glyph",
-      content: `Room ${code} created. Share the code with a friend.`,
-      type: "system",
-      ts: Date.now(),
-    });
-  }, [player, ensureSocket, pushMessage]);
+    // emit identify first, then room:create — socket.io preserves order
+    const doCreate = () => sock.emit("room:create", { name: player.username, avatarSeed: player.avatarSeed, playerId: player.id });
+    if (identifiedRef.current) {
+      doCreate();
+    } else {
+      sock.emit(
+        "player:identify",
+        { id: player.id, name: player.username, avatarSeed: player.avatarSeed },
+        () => { identifiedRef.current = true; doCreate(); }
+      );
+    }
+  }, [player, ensureSocket]);
 
   const joinRoom = useCallback(
     async (code: string) => {
@@ -396,17 +539,27 @@ export function useDuel({ player }: UseDuelOptions) {
         ...s,
         phase: "waiting",
         mode: "online",
-        roomCode: code.toUpperCase(),
+        roomCode: null,       // will be set by room:joined event
         messages: [],
         reactions: [],
         presenceError: null,
       }));
-      sock.emit("room:join", {
+      const doJoin = () => sock.emit("room:join", {
         roomId: code.toUpperCase(),
         name: player.username,
         avatarSeed: player.avatarSeed,
         playerId: player.id,
       });
+      if (identifiedRef.current) {
+        doJoin();
+      } else {
+        // not identified yet: identify then join
+        sock.emit(
+          "player:identify",
+          { id: player.id, name: player.username, avatarSeed: player.avatarSeed },
+          () => { identifiedRef.current = true; doJoin(); }
+        );
+      }
       pushMessage({
         id: Math.random().toString(36).slice(2),
         name: "System",
@@ -490,6 +643,7 @@ export function useDuel({ player }: UseDuelOptions) {
       const sock = socketRef.current;
       if (sock && state.mode === "online" && state.roomCode) {
         sock.emit("game:finish", { roomId: state.roomCode, won, guessesUsed, durationMs });
+        clearDuelSession();
       }
     },
     [state.mode, state.roomCode]
@@ -501,6 +655,7 @@ export function useDuel({ player }: UseDuelOptions) {
     const sock = socketRef.current;
     if (sock && state.roomCode) {
       sock.emit("room:leave");
+      clearDuelSession();
     }
     setState({
       phase: "lobby",
@@ -513,6 +668,9 @@ export function useDuel({ player }: UseDuelOptions) {
       messages: [],
       reactions: [],
       presenceError: null,
+      opponentGraceUntil: null,
+      opponentForfeited: false,
+      isHost: false,
     });
   }, [state.roomCode]);
 

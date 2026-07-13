@@ -5,7 +5,8 @@ import { Crown, Users, Trophy, Flame, Zap, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/common/avatar";
 import { RankBadge, RankIcon } from "@/components/common/rank-badge";
-import { api, classNames } from "@/lib/api";
+import { classNames } from "@/lib/api";
+import { useCachedApi, invalidateCache } from "@/lib/use-cached-api";
 
 interface LeaderEntry {
   position: number;
@@ -42,21 +43,24 @@ interface LeaderViewProps {
 }
 
 export function LeaderboardView({ statsNonce }: LeaderViewProps) {
-  const [entries, setEntries] = useState<LeaderEntry[]>([]);
-  const [friends, setFriends] = useState<FriendEntry[]>([]);
-  const [myPos, setMyPos] = useState(0);
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<"global" | "friends">("global");
+  const { data, refresh } = useCachedApi<{
+    leaderboard: LeaderEntry[];
+    friends: FriendEntry[];
+    myPosition: number;
+  }>("/api/leaderboard");
 
   useEffect(() => {
-    api<{ leaderboard: LeaderEntry[]; friends: FriendEntry[]; myPosition: number }>(
-      "/api/leaderboard"
-    ).then((d) => {
-      setEntries(d.leaderboard);
-      setFriends(d.friends);
-      setMyPos(d.myPosition);
-    });
-  }, [statsNonce]);
+    if (statsNonce > 0) {
+      invalidateCache("/api/leaderboard");
+      void refresh(true);
+    }
+  }, [statsNonce, refresh]);
+
+  const entries = data?.leaderboard ?? [];
+  const friends = data?.friends ?? [];
+  const myPos = data?.myPosition ?? 0;
 
   const filtered = entries.filter((e) =>
     e.username.toLowerCase().includes(query.toLowerCase())

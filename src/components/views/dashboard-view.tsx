@@ -23,6 +23,7 @@ import { StatCard } from "@/components/common/stat-card";
 import { Countdown } from "@/components/game/game-timer";
 import { useGlyph } from "@/lib/store";
 import { api, formatDuration, formatTime } from "@/lib/api";
+import { useCachedApi, invalidateCache } from "@/lib/use-cached-api";
 import { rankForPoints } from "@/lib/types";
 
 interface DashboardViewProps {
@@ -71,6 +72,7 @@ interface StatsData {
     won: boolean;
     guessesUsed: number;
     durationMs: number;
+    isDaily: boolean;
     opponentName: string | null;
     dailyDate: string | null;
     xpEarned: number;
@@ -106,20 +108,21 @@ export function DashboardView({ player, statsNonce }: DashboardViewProps) {
   const setView = useGlyph((s) => s.setView);
   const startDuel = useGlyph((s) => s.startDuel);
   const [daily, setDaily] = useState<DailyInfo | null>(null);
-  const [stats, setStats] = useState<StatsData | null>(null);
-  const [leader, setLeader] = useState<LeaderData | null>(null);
+  const { data: stats, refresh: refreshStats } = useCachedApi<StatsData>("/api/stats");
+  const { data: leader, refresh: refreshLeader } = useCachedApi<LeaderData>("/api/leaderboard");
 
   useEffect(() => {
     api<DailyInfo>("/api/words/daily").then(setDaily).catch(() => {});
   }, []);
 
   useEffect(() => {
-    api<StatsData>("/api/stats").then(setStats).catch(() => {});
-  }, [statsNonce]);
-
-  useEffect(() => {
-    api<LeaderData>("/api/leaderboard").then(setLeader).catch(() => {});
-  }, [statsNonce]);
+    if (statsNonce > 0) {
+      invalidateCache("/api/stats");
+      invalidateCache("/api/leaderboard");
+      void refreshStats(true);
+      void refreshLeader(true);
+    }
+  }, [statsNonce, refreshStats, refreshLeader]);
 
   const rank = player ? rankForPoints(player.rankPoints) : null;
 

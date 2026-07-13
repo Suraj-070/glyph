@@ -6,6 +6,10 @@ import { api } from "@/lib/api";
 
 export interface UseWordleOptions {
   seed: string | null;
+  /** Restore a refreshed game: newest token + already-revealed guesses. */
+  resume?: { token: string; guesses: GuessResult[]; startedAt?: number } | null;
+  /** Called when the server says the session token is invalid/expired. */
+  onSessionExpired?: () => void;
   maxGuesses: number;
   mode: string;
   // callback when a guess is finalized (for opponent progress relay in duel)
@@ -36,7 +40,11 @@ export interface WordleState {
 const WORD_LENGTH = 5;
 
 export function useWordleGame(opts: UseWordleOptions) {
-  const { seed, maxGuesses, mode, onGuessFinalized, onGameEnd, locked } = opts;
+  const { seed, maxGuesses, mode, onGuessFinalized, onGameEnd, locked = false, resume, onSessionExpired } = opts;
+  // rotating signed token — starts as the issued token, replaced on every guess
+  const tokenRef = useRef<string | null>(seed);
+  const lockedRef = useRef(locked);
+  useEffect(() => { lockedRef.current = locked; }, [locked]);
   const [guesses, setGuesses] = useState<GuessResult[]>([]);
   const [current, setCurrent] = useState("");
   const [status, setStatus] = useState<"idle" | "playing" | "won" | "lost">(
@@ -50,15 +58,24 @@ export function useWordleGame(opts: UseWordleOptions) {
   const startRef = useRef<number>(Date.now());
   const endedRef = useRef(false);
 
-  // reset when seed changes
+  // reset when seed changes (or hydrate from a resume snapshot)
   useEffect(() => {
-    setGuesses([]);
+    if (resume && seed && resume.token) {
+      tokenRef.current = resume.token;      // newest rotated token, not the issued one
+      setGuesses(resume.guesses);
+      setStatus(resume.guesses.length >= maxGuesses ? "lost" : "playing");
+      startRef.current = resume.startedAt ?? Date.now();
+    } else {
+      tokenRef.current = seed;
+      setGuesses([]);
+      startRef.current = Date.now();
+      setStatus(seed ? "playing" : "idle");
+    }
     setCurrent("");
-    setStatus(seed ? "playing" : "idle");
     setError(null);
     setFinalWord(null);
     endedRef.current = false;
-    startRef.current = Date.now();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed]);
 
   const keyStates = computeKeyStates(guesses);
@@ -87,11 +104,13 @@ export function useWordleGame(opts: UseWordleOptions) {
         finished: boolean;
         word?: string;
         invalid?: boolean;
+        token?: string;
       }>("/api/words/validate", {
         method: "POST",
-        body: JSON.stringify({ seed, guess: current, attempt }),
+        body: JSON.stringify({ token: tokenRef.current, guess: current }),
       });
 
+      if (res.token) tokenRef.current = res.token;
       if (res.invalid) {
         showError("Not in word list");
         setRevealing(false);
@@ -138,9 +157,18 @@ export function useWordleGame(opts: UseWordleOptions) {
       }, 500 + WORD_LENGTH * 180);
     } catch (e) {
       setRevealing(false);
-      showError(e instanceof Error ? e.message : "Validation failed");
+      const httpStatus = (e as Error & { status?: number }).status;
+      if (httpStatus === 404) {
+        showError("Session expired");
+        onSessionExpired?.();
+      } else if (httpStatus === undefined) {
+        // network failure — typed word stays in the row, ENTER retries safely
+        showError("Connection lost — press Enter to retry");
+      } else {
+        showError(e instanceof Error ? e.message : "Validation failed");
+      }
     }
-  }, [locked, status, seed, current, guesses, onGuessFinalized, onGameEnd, showError]);
+  }, [locked, status, seed, current, guesses, onGuessFinalized, onGameEnd, onSessionExpired, showError]);
 
   const onKey = useCallback(
     (key: string) => {
@@ -163,8 +191,11 @@ export function useWordleGame(opts: UseWordleOptions) {
   // physical keyboard
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (locked || status !== "playing") return;
+      if (lockedRef.current || status !== "playing") return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // ignore keystrokes when user is typing in chat / any input
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
       const k = e.key.toUpperCase();
       if (k === "ENTER") {
         e.preventDefault();
@@ -181,6 +212,7 @@ export function useWordleGame(opts: UseWordleOptions) {
   }, [onKey, locked, status]);
 
   return {
+    getToken: () => tokenRef.current,
     guesses,
     current,
     status,

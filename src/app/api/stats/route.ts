@@ -20,57 +20,61 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const player = await getCurrentPlayer();
 
-  const profile = await db.playerProfile.upsert({
-    where: { playerId: player.id },
-    update: {},
-    create: { playerId: player.id },
-    include: { player: true },
-  });
+  // everything below only needs player.id — run in ONE parallel batch
+  const [profile, history, fav, achievements, recentGames, streakFreeze] =
+    await Promise.all([
+      db.playerProfile.upsert({
+        where: { playerId: player.id },
+        update: {},
+        create: { playerId: player.id },
+        include: { player: true },
+      }),
+      getDailyHistory(player.id),
+      favoriteFirstWord(player.id),
+      db.achievement.findMany({
+        where: { playerId: player.id },
+        orderBy: { unlockedAt: "desc" },
+      }),
+      db.game.findMany({
+        where: { playerId: player.id },
+        orderBy: { completedAt: "desc" },
+        take: 8,
+        select: {
+          id: true,
+          mode: true,
+          won: true,
+          guessesUsed: true,
+          durationMs: true,
+          isDaily: true,
+          dailyDate: true,
+          opponentName: true,
+          xpEarned: true,
+          completedAt: true,
+          word: true,
+        },
+      }),
+      db.streakFreeze.upsert({
+        where: { playerId: player.id },
+        update: {},
+        create: { playerId: player.id, count: 2 },
+      }),
+    ]);
 
-  // recompute streak to be accurate even if profile is stale
-  const history = await getDailyHistory(player.id);
   const liveStreak = computeCurrentStreak(history);
   if (liveStreak !== profile.currentStreak) {
-    await db.playerProfile.update({
-      where: { playerId: player.id },
-      data: {
-        currentStreak: liveStreak,
-        longestStreak: Math.max(profile.longestStreak, liveStreak),
-      },
-    });
+    // fire-and-forget: response doesn't need to wait for the correction
+    db.playerProfile
+      .update({
+        where: { playerId: player.id },
+        data: {
+          currentStreak: liveStreak,
+          longestStreak: Math.max(profile.longestStreak, liveStreak),
+        },
+      })
+      .catch(() => {});
   }
 
   const avg = computeAverages(profile);
-  const fav = await favoriteFirstWord(player.id);
-  const achievements = await db.achievement.findMany({
-    where: { playerId: player.id },
-    orderBy: { unlockedAt: "desc" },
-  });
-
-  const recentGames = await db.game.findMany({
-    where: { playerId: player.id },
-    orderBy: { completedAt: "desc" },
-    take: 8,
-    select: {
-      id: true,
-      mode: true,
-      won: true,
-      guessesUsed: true,
-      durationMs: true,
-      isDaily: true,
-      dailyDate: true,
-      opponentName: true,
-      xpEarned: true,
-      completedAt: true,
-      word: true,
-    },
-  });
-
-  const streakFreeze = await db.streakFreeze.upsert({
-    where: { playerId: player.id },
-    update: {},
-    create: { playerId: player.id, count: 2 },
-  });
 
   const rank = rankForPoints(player.rankPoints);
   const nr = nextRank(player.rankPoints);

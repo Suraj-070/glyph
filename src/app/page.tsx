@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sidebar, MobileNav } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
@@ -13,6 +13,7 @@ import { ProfileView } from "@/components/views/profile-view";
 import { LeaderboardView } from "@/components/views/leaderboard-view";
 import { HowToView } from "@/components/views/howto-view";
 import { useGlyph } from "@/lib/store";
+import { installSubmitFlusher } from "@/lib/game-persist";
 import { api } from "@/lib/api";
 import { levelForXp, xpProgress, rankForPoints } from "@/lib/types";
 
@@ -43,13 +44,12 @@ export default function Page() {
         if (!alive) return;
         setSession(s);
         setPlayer(s);
-        // seed bots + friends (idempotent)
-        api("/api/seed").catch(() => {});
-        // ensure presence online
-        api("/api/friends", {
-          method: "POST",
-          body: JSON.stringify({ status: "online" }),
-        }).catch(() => {});
+        // seed bots + friends — once per browser, not every page load
+        if (!localStorage.getItem("glyph-seeded")) {
+          api("/api/seed")
+            .then(() => localStorage.setItem("glyph-seeded", "1"))
+            .catch(() => {});
+        }
       } catch {
         // ignore
       } finally {
@@ -72,6 +72,9 @@ export default function Page() {
       .catch(() => {});
   }, [statsNonce, ready, setPlayer]);
 
+  // flush any offline-queued game submits (on load + when back online)
+  useEffect(() => installSubmitFlusher(() => bumpStats()), [bumpStats]);
+
   // mark presence when leaving
   useEffect(() => {
     const onUnload = () => {
@@ -84,39 +87,22 @@ export default function Page() {
     return () => window.removeEventListener("beforeunload", onUnload);
   }, []);
 
-  // update presence on view change
+  // update presence only when status actually flips (online <-> playing)
+  const lastStatusRef = useRef<string | null>(null);
   useEffect(() => {
     if (!ready || !session) return;
     const status = view === "duel" || view === "classic" || view === "practice" || view === "party"
       ? "playing"
       : "online";
+    if (lastStatusRef.current === status) return;
+    lastStatusRef.current = status;
     api("/api/friends", {
       method: "POST",
       body: JSON.stringify({ status }),
     }).catch(() => {});
   }, [view, ready, session]);
 
-  if (!ready) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="text-center"
-        >
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-            className="h-12 w-12 mx-auto rounded-2xl bg-gradient-to-br from-teal to-violet flex items-center justify-center font-black text-black text-xl mb-3"
-          >
-            G
-          </motion.div>
-          <p className="text-sm text-muted-foreground">Booting GLYPH arena…</p>
-        </motion.div>
-      </div>
-    );
-  }
-
+  // no boot gate: shell renders immediately, session hydrates in background
   const playerForViews = session
     ? {
         id: session.id,

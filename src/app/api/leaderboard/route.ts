@@ -4,18 +4,25 @@ import { db } from "@/lib/db";
 import { getCurrentPlayer } from "@/lib/session";
 import { rankForPoints, levelForXp } from "@/lib/types";
 
+const FRIENDS_QUERY = (meId: string) => ({
+    where: {
+      OR: [{ senderId: meId, status: "accepted" }, { receiverId: meId, status: "accepted" }],
+    },
+    include: {
+      sender: { select: { id: true, username: true, avatarSeed: true, status: true, rankPoints: true, xp: true, level: true } },
+      receiver: { select: { id: true, username: true, avatarSeed: true, status: true, rankPoints: true, xp: true, level: true } },
+    },
+  });
+
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const me = await getCurrentPlayer();
 
-  // Ensure I'm marked online
-  await db.player.update({
-    where: { id: me.id },
-    data: { status: "online" },
-  }).catch(() => {});
+  // Ensure I'm marked online — fire-and-forget
+  db.player.update({ where: { id: me.id }, data: { status: "online" } }).catch(() => {});
 
-  const top = await db.player.findMany({
+  const topPromise = db.player.findMany({
     orderBy: { rankPoints: "desc" },
     take: 50,
     select: {
@@ -29,6 +36,9 @@ export async function GET() {
       profile: { select: { wins: true, totalGames: true, currentStreak: true, longestStreak: true } },
     },
   });
+
+  const friendsPromise = db.friendship.findMany(FRIENDS_QUERY(me.id));
+  const [top, friends] = await Promise.all([topPromise, friendsPromise]);
 
   const ranked = top.map((p, i) => {
     const rank = rankForPoints(p.rankPoints);
@@ -52,16 +62,6 @@ export async function GET() {
     };
   });
 
-  // Friends (accepted) with presence
-  const friends = await db.friendship.findMany({
-    where: {
-      OR: [{ senderId: me.id, status: "accepted" }, { receiverId: me.id, status: "accepted" }],
-    },
-    include: {
-      sender: { select: { id: true, username: true, avatarSeed: true, status: true, rankPoints: true, xp: true, level: true } },
-      receiver: { select: { id: true, username: true, avatarSeed: true, status: true, rankPoints: true, xp: true, level: true } },
-    },
-  });
   const friendList = friends.map((f) => {
     const other = f.senderId === me.id ? f.receiver : f.sender;
     const rank = rankForPoints(other.rankPoints);

@@ -1,8 +1,8 @@
-// POST /api/words/duel — get-or-create a duel word session from a shared wordSeed.
-// Both players POST the same wordSeed (issued by the socket server) and receive
-// the SAME opaque seed -> same secret word (kept server-side).
+// POST /api/words/duel — duel session token. Word derived DETERMINISTICALLY
+// from shared wordSeed (both players compute same word). 0 DB queries.
 import { NextResponse } from "next/server";
-import { createOrGetDuelSession } from "@/lib/word-session";
+import { signGameToken, duelWordFromSeed } from "@/lib/game-token";
+import { getPool } from "@/lib/words";
 
 export const dynamic = "force-dynamic";
 
@@ -17,11 +17,15 @@ export async function POST(req: Request) {
   if (!wordSeed || wordSeed.length < 3) {
     return NextResponse.json({ error: "Missing wordSeed" }, { status: 400 });
   }
-  const session = createOrGetDuelSession(wordSeed);
-  return NextResponse.json({
-    seed: session.seed,
+  const token = signGameToken({
+    seed: `L-${wordSeed}`,
+    word: duelWordFromSeed(wordSeed, getPool("duel")),
     mode: "duel",
-    maxGuesses: session.maxGuesses,
-    wordLength: 5,
+    maxGuesses: 6,
+    guessesUsed: 0,
+    won: false,
+    finished: false,
+    createdAt: Date.now(),
   });
+  return NextResponse.json({ token, mode: "duel", maxGuesses: 6, wordLength: 5 });
 }

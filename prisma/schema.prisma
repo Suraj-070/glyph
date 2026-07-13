@@ -6,8 +6,27 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")   // Supabase pooled (6543, pgbouncer=true)
+  directUrl = env("DIRECT_URL")     // Supabase direct (5432) for migrations
+}
+
+// ---- Server-side word sessions (replaces in-memory Map; serverless-safe) ----
+
+model WordSession {
+  seed        String   @id
+  word        String
+  mode        String   // classic | practice | duel
+  dailyType   String?
+  dailyDate   String?
+  maxGuesses  Int      @default(6)
+  guessesUsed Int      @default(0)
+  won         Boolean  @default(false)
+  finished    Boolean  @default(false)
+  consumed    Boolean  @default(false) // submitted to /api/game/submit
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
 }
 
 // ---- Players & Profiles ----

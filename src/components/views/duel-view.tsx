@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { WordleBoard } from "@/components/game/wordle-board";
 import { WordleKeyboard } from "@/components/game/wordle-keyboard";
 import { OpponentBoard } from "@/components/game/opponent-board";
+import { OpponentBubble, FloatingChatBubble } from "@/components/game/floating-hud";
 import { ResultModal } from "@/components/game/result-modal";
 import { Confetti } from "@/components/game/confetti";
 import { GameTimer } from "@/components/game/game-timer";
@@ -55,6 +56,8 @@ export function DuelView({ player }: DuelViewProps) {
   const [joinCode, setJoinCode] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [copied, setCopied] = useState(false);
+  const [seenCount, setSeenCount] = useState(0);
+  const [chatFocused, setChatFocused] = useState(false);
   const [result, setResult] = useState<{
     open: boolean;
     won: boolean;
@@ -80,6 +83,8 @@ export function DuelView({ player }: DuelViewProps) {
     [duel]
   );
 
+  const gameTokenRef = useRef<string | null>(null);
+
   const onGameEnd = useCallback(
     async (r: GameEndResult) => {
       duel.reportMyFinish(r.won, r.guessesUsed, r.durationMs);
@@ -93,7 +98,7 @@ export function DuelView({ player }: DuelViewProps) {
         }>("/api/game/submit", {
           method: "POST",
           body: JSON.stringify({
-            seed: duel.duelSeed,
+            token: gameTokenRef.current,
             mode: "duel",
             guessesUsed: r.guessesUsed,
             won: r.won,
@@ -149,9 +154,34 @@ export function DuelView({ player }: DuelViewProps) {
     seed: duel.duelSeed,
     maxGuesses: duel.maxGuesses,
     mode: "duel",
-    onGuessFinalized,
+    onGuessFinalized: (g, attempt, won, finished) => {
+      gameTokenRef.current = game.getToken();
+      onGuessFinalized?.(g, attempt, won, finished);
+    },
     onGameEnd,
+    locked: chatFocused,
   });
+
+  // keep gameTokenRef in sync after each guess
+  useEffect(() => {
+    gameTokenRef.current = game.getToken();
+  });
+
+  // opponent forfeited mid-match -> instant win for us
+  useEffect(() => {
+    if (duel.opponentForfeited && game.status === "playing" && !result) {
+      setResult({
+        open: true,
+        won: true,
+        word: "",
+        guessesUsed: game.guesses.length,
+        durationMs: duel.matchStartedAt ? Date.now() - duel.matchStartedAt : 0,
+        opponentWon: false,
+        opponentName: duel.opponent?.name,
+      });
+      duel.reportMyFinish(true, Math.max(1, game.guesses.length), 0);
+    }
+  }, [duel.opponentForfeited]);
 
   // report typing when current changes
   useEffect(() => {
@@ -271,6 +301,7 @@ export function DuelView({ player }: DuelViewProps) {
               <Input
                 value={joinCode}
                 onChange={(e) => setJoinCode(e.target.value.toUpperCase().slice(0, 6))}
+                onKeyDown={(e) => e.key === "Enter" && joinCode.length === 6 && duel.joinRoom(joinCode)}
                 placeholder="ABC123"
                 className="text-center font-mono tracking-widest uppercase"
                 maxLength={6}
@@ -326,12 +357,20 @@ export function DuelView({ player }: DuelViewProps) {
           </p>
 
           <div className="mt-6 flex items-center justify-center gap-3">
-            <div className="glass rounded-xl px-6 py-3 font-mono text-3xl tracking-[0.3em] font-black text-gradient">
-              {duel.roomCode}
-            </div>
-            <Button variant="outline" size="icon" onClick={copyCode} title="Copy code">
-              {copied ? <Check className="h-4 w-4 text-teal" /> : <Copy className="h-4 w-4" />}
-            </Button>
+            {duel.roomCode ? (
+              <>
+                <div className="glass rounded-xl px-6 py-3 font-mono text-3xl tracking-[0.3em] font-black text-gradient">
+                  {duel.roomCode}
+                </div>
+                <Button variant="outline" size="icon" onClick={copyCode} title="Copy code">
+                  {copied ? <Check className="h-4 w-4 text-teal" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </>
+            ) : (
+              <div className="glass rounded-xl px-6 py-3 font-mono text-3xl tracking-[0.3em] font-black text-muted-foreground/30 animate-pulse select-none">
+                ······
+              </div>
+            )}
           </div>
 
           <div className="mt-6 flex items-center justify-center gap-2 text-xs text-muted-foreground">
@@ -340,12 +379,18 @@ export function DuelView({ player }: DuelViewProps) {
           </div>
 
           {duel.opponent ? (
-            <Button
-              className="mt-6 bg-teal text-teal-foreground hover:bg-teal/90"
-              onClick={duel.startOnlineMatch}
-            >
-              <Swords className="h-4 w-4 mr-2" /> Start Match
-            </Button>
+            duel.isHost ? (
+              <Button
+                className="mt-6 bg-teal text-teal-foreground hover:bg-teal/90"
+                onClick={duel.startOnlineMatch}
+              >
+                <Swords className="h-4 w-4 mr-2" /> Start Match
+              </Button>
+            ) : (
+              <p className="mt-4 text-sm text-muted-foreground animate-pulse">
+                Waiting for host to start…
+              </p>
+            )
           ) : (
             <Button
               variant="outline"
@@ -377,12 +422,26 @@ export function DuelView({ player }: DuelViewProps) {
 
   // ---------- PLAYING / FINISHED ----------
   return (
-    <div className="px-3 sm:px-6 py-4 max-w-7xl mx-auto">
+    <div className="px-2 sm:px-6 py-2 sm:py-4 max-w-7xl mx-auto lg:block flex flex-col min-h-[calc(100dvh-8.5rem)]">
       {/* top bar */}
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <Button variant="ghost" size="sm" onClick={duel.reset}>
-          <ArrowLeft className="h-4 w-4 mr-1" /> Exit
-        </Button>
+      <div className="flex items-center justify-between mb-2 sm:mb-4 gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Button variant="ghost" size="sm" onClick={duel.reset} className="shrink-0 px-2">
+            <ArrowLeft className="h-4 w-4" />
+            <span className="hidden sm:inline ml-1">Exit</span>
+          </Button>
+          {/* mobile: opponent bubble lives in the bar — no overlap with title */}
+          <OpponentBubble
+            name={duel.opponent?.name ?? "Opponent"}
+            avatarSeed={duel.opponent?.avatarSeed ?? "opp"}
+            rows={duel.opponent?.rows ?? []}
+            maxGuesses={duel.maxGuesses}
+            wordLength={5}
+            typing={duel.opponent?.typing}
+            won={duel.opponent?.won}
+            lost={duel.opponent?.lost}
+          />
+        </div>
         <div className="flex items-center gap-2">
           {duel.mode === "bot" ? (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-teal/15 text-teal uppercase tracking-wide flex items-center gap-1">
@@ -397,10 +456,35 @@ export function DuelView({ player }: DuelViewProps) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px_1fr] gap-4">
+      {duel.opponentGraceUntil ? (
+        <div className="mb-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-xs text-amber-300 flex items-center gap-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+          Opponent disconnected — waiting for them to return…
+        </div>
+      ) : null}
+
+      <FloatingChatBubble unread={Math.max(0, duel.messages.length - seenCount)}>
+        <div onFocusCapture={() => setSeenCount(duel.messages.length)} onClick={() => setSeenCount(duel.messages.length)} className="h-full">
+          <ChatPanel
+            messages={duel.messages}
+            reactions={[]}
+            chatInput={chatInput}
+            setChatInput={setChatInput}
+            sendChat={sendChat}
+            sendReaction={duel.sendReaction}
+            chatEndRef={chatEndRef}
+            player={player}
+            onChatFocus={() => setChatFocused(true)}
+            onChatBlur={() => setChatFocused(false)}
+            compact
+          />
+        </div>
+      </FloatingChatBubble>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px_1fr] gap-4 flex-1 lg:flex-none">
         {/* LEFT: your board */}
-        <div className="flex flex-col items-center gap-3 order-2 lg:order-1">
-          <div className="flex items-center gap-2 self-start">
+        <div className="flex flex-col items-center gap-2 sm:gap-3 order-1 lg:order-1 flex-1 lg:flex-none">
+          <div className="hidden sm:flex items-center gap-2 self-start">
             <Avatar seed={player?.avatarSeed ?? "me"} name={player?.username} size={28} status="playing" />
             <span className="text-sm font-semibold">{player?.username ?? "You"}</span>
             <span className="text-[10px] text-muted-foreground">(you)</span>
@@ -410,24 +494,28 @@ export function DuelView({ player }: DuelViewProps) {
               {game.error}
             </div>
           ) : null}
-          <WordleBoard
-            guesses={game.guesses}
-            current={game.current}
-            maxGuesses={game.maxGuesses}
-            wordLength={game.wordLength}
-            revealing={game.revealing}
-            shakingRow={game.shakingRow}
-            size="md"
-          />
-          <WordleKeyboard
-            onKey={game.onKey}
-            keyStates={game.keyStates}
-            disabled={game.status !== "playing"}
-          />
+          <div className="flex-1 lg:flex-none flex items-center">
+            <WordleBoard
+              guesses={game.guesses}
+              current={game.current}
+              maxGuesses={game.maxGuesses}
+              wordLength={game.wordLength}
+              revealing={game.revealing}
+              shakingRow={game.shakingRow}
+              size="md"
+            />
+          </div>
+          <div className="w-full sticky bottom-0 z-10 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-1 bg-gradient-to-t from-background via-background/95 to-transparent lg:static lg:p-0 lg:bg-none">
+            <WordleKeyboard
+              onKey={game.onKey}
+              keyStates={game.keyStates}
+              disabled={game.status !== "playing"}
+            />
+          </div>
         </div>
 
-        {/* CENTER: status + chat */}
-        <div className="order-1 lg:order-2 flex flex-col gap-3">
+        {/* CENTER: status + chat — desktop only; mobile uses floating HUD */}
+        <div className="order-2 lg:order-2 hidden lg:flex flex-col gap-3">
           {/* versus banner */}
           <div className="glass rounded-xl p-3 flex items-center justify-between">
             <PlayerChip
@@ -520,12 +608,14 @@ export function DuelView({ player }: DuelViewProps) {
             sendReaction={() => {}}
             chatEndRef={chatEndRef}
             player={player}
+            onChatFocus={() => setChatFocused(true)}
+            onChatBlur={() => setChatFocused(false)}
             compact
           />
         </div>
 
-        {/* RIGHT: opponent board (color only) */}
-        <div className="order-3 flex flex-col gap-3">
+        {/* RIGHT: opponent board (color only) — desktop only */}
+        <div className="order-3 hidden lg:flex flex-col gap-3">
           <div className="glass rounded-xl p-3">
             <div className="flex items-center gap-2 mb-3">
               <Avatar
@@ -627,6 +717,8 @@ function ChatPanel({
   chatEndRef,
   player,
   compact,
+  onChatFocus,
+  onChatBlur,
 }: {
   messages: Array<{ id: string; name: string; avatarSeed: string; content: string; type: string; ts: number }>;
   reactions: Array<{ id: string; emoji: string; name: string }>;
@@ -637,6 +729,8 @@ function ChatPanel({
   chatEndRef: React.RefObject<HTMLDivElement | null>;
   player: { username: string; avatarSeed: string } | null;
   compact?: boolean;
+  onChatFocus?: () => void;
+  onChatBlur?: () => void;
 }) {
   return (
     <div className={classNames("glass rounded-xl flex flex-col", compact ? "h-44" : "h-56")}>
@@ -678,7 +772,10 @@ function ChatPanel({
         <Input
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
+          onFocus={onChatFocus}
+          onBlur={onChatBlur}
           onKeyDown={(e) => {
+            e.stopPropagation();
             if (e.key === "Enter") sendChat();
           }}
           placeholder="Message…"

@@ -1,5 +1,6 @@
 "use client";
-import { motion, AnimatePresence } from "framer-motion";
+// CSS-only — framer-motion removed (mobile perf). Includes OpponentStrip:
+// compact single-row progress for phone layouts.
 import type { TileStatus } from "@/lib/types";
 import { classNames } from "@/lib/api";
 
@@ -23,6 +24,18 @@ const SIZES = {
   md: "w-10 h-10 rounded-md",
 };
 
+function cellClass(st: TileStatus): string {
+  return st === "correct"
+    ? "tile-correct border-transparent"
+    : st === "present"
+    ? "tile-present border-transparent"
+    : st === "absent"
+    ? "tile-absent border-transparent"
+    : st === "tbd"
+    ? "tile-tbd"
+    : "tile-empty";
+}
+
 export function OpponentBoard({
   rows,
   maxGuesses,
@@ -43,43 +56,21 @@ export function OpponentBoard({
       if (row) {
         st = row.statuses[c] ?? "empty";
         isReveal = row.final;
-      } else if (r === rows.length && typing && c < wordLength) {
-        // show a subtle typing shimmer on the current row
+      } else if (r === rows.length && typing) {
         st = "tbd";
         isTypingCell = true;
       }
-      const statusClass =
-        st === "correct"
-          ? "tile-correct border-transparent"
-          : st === "present"
-          ? "tile-present border-transparent"
-          : st === "absent"
-          ? "tile-absent border-transparent"
-          : st === "tbd"
-          ? "tile-tbd"
-          : "tile-empty";
-
       cells.push(
-        <motion.div
+        <div
           key={c}
           className={classNames(
             "border-2 flex items-center justify-center",
             SIZES[size],
-            statusClass
+            cellClass(st),
+            isReveal && (st === "correct" || st === "present" || st === "absent") && "animate-tile-flip",
+            isTypingCell && "animate-pulse"
           )}
-          animate={
-            isReveal && (st === "correct" || st === "present" || st === "absent")
-              ? { rotateX: [0, 90, 0], scale: [1, 1.05, 1] }
-              : isTypingCell
-              ? { opacity: [0.4, 1, 0.4] }
-              : {}
-          }
-          transition={
-            isReveal
-              ? { duration: 0.45, delay: c * 0.12 }
-              : { duration: 1.2, repeat: isTypingCell ? Infinity : 0 }
-          }
-          style={{ transformStyle: "preserve-3d" }}
+          style={isReveal ? { animationDelay: `${c * 0.1}s` } : undefined}
         >
           {st === "correct" ? (
             <svg width="50%" height="50%" viewBox="0 0 24 24" fill="none" className="opacity-90">
@@ -88,7 +79,7 @@ export function OpponentBoard({
           ) : st === "present" ? (
             <span className="w-1.5 h-1.5 rounded-full bg-current" />
           ) : null}
-        </motion.div>
+        </div>
       );
     }
     display.push(
@@ -101,28 +92,68 @@ export function OpponentBoard({
   return (
     <div className="relative flex flex-col gap-1 items-center">
       {display}
-      <AnimatePresence>
-        {won && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 flex items-center justify-center bg-emerald-500/10 rounded-lg backdrop-blur-[2px]"
-          >
-            <span className="text-emerald-300 font-bold text-xs uppercase tracking-wider">Solved</span>
-          </motion.div>
+      {won && (
+        <div className="absolute inset-0 flex items-center justify-center bg-emerald-500/10 rounded-lg backdrop-blur-[2px] animate-fade-in">
+          <span className="text-emerald-300 font-bold text-xs uppercase tracking-wider">Solved</span>
+        </div>
+      )}
+      {lost && !won && (
+        <div className="absolute inset-0 flex items-center justify-center bg-rose-500/10 rounded-lg backdrop-blur-[2px] animate-fade-in">
+          <span className="text-rose-300 font-bold text-xs uppercase tracking-wider">Out</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * OpponentStrip — phone-sized: one row, latest guess colors + attempt count.
+ * Shows opponent presence without eating half the viewport.
+ */
+export function OpponentStrip({
+  name,
+  rows,
+  maxGuesses,
+  wordLength,
+  typing,
+  won,
+  lost,
+}: {
+  name: string;
+  rows: OpponentRow[];
+  maxGuesses: number;
+  wordLength: number;
+  typing?: boolean;
+  won?: boolean;
+  lost?: boolean;
+}) {
+  const last = rows.length ? rows[rows.length - 1] : null;
+  return (
+    <div className="flex items-center gap-2 glass rounded-lg px-2.5 py-1.5 w-full max-w-lg mx-auto">
+      <span className="text-xs font-semibold truncate flex-1 min-w-0">{name}</span>
+      {typing ? (
+        <span className="flex gap-0.5 shrink-0">
+          <span className="w-1 h-1 rounded-full bg-teal animate-bounce" />
+          <span className="w-1 h-1 rounded-full bg-teal animate-bounce" style={{ animationDelay: "120ms" }} />
+          <span className="w-1 h-1 rounded-full bg-teal animate-bounce" style={{ animationDelay: "240ms" }} />
+        </span>
+      ) : null}
+      <div className="flex gap-0.5 shrink-0">
+        {Array.from({ length: wordLength }).map((_, c) => (
+          <span
+            key={c}
+            className={classNames("w-3.5 h-3.5 rounded-sm border", cellClass(last?.statuses[c] ?? "empty"))}
+          />
+        ))}
+      </div>
+      <span
+        className={classNames(
+          "text-[10px] font-bold shrink-0 tabular-nums",
+          won ? "text-emerald-300" : lost ? "text-rose-300" : "text-muted-foreground"
         )}
-        {lost && !won && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 flex items-center justify-center bg-rose-500/10 rounded-lg backdrop-blur-[2px]"
-          >
-            <span className="text-rose-300 font-bold text-xs uppercase tracking-wider">Out</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      >
+        {won ? "SOLVED" : lost ? "OUT" : `${rows.length}/${maxGuesses}`}
+      </span>
     </div>
   );
 }

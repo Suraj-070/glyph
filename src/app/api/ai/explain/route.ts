@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
+import { groqChat } from "@/lib/groq";
 
 // AI SDK must run server-side only.
 export const runtime = "nodejs";
@@ -132,16 +132,7 @@ export async function POST(req: Request) {
   const userMessage = `Word: ${word}`;
 
   try {
-    const zai = await ZAI.create();
-    const completion: unknown = await zai.chat.completions.create({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-      thinking: { type: "disabled" },
-    });
-
-    const raw = extractContent(completion);
+    const raw = await groqChat(systemPrompt, userMessage);
     const parsed = parseExplainJSON(raw, word);
 
     if (!parsed) {

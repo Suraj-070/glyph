@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Trophy, Skull, RotateCcw, Share2, Zap, Flame, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ interface ResultModalProps {
   onClose?: () => void;
   onShare?: () => void;
   showAi?: boolean;
+  pendingSync?: boolean;
 }
 
 export function ResultModal({
@@ -39,7 +41,16 @@ export function ResultModal({
   onClose,
   onShare,
   showAi = true,
+  pendingSync = false,
 }: ResultModalProps) {
+  const [aiOpen, setAiOpen] = useState(false);
+  // reset AI panel when a new word arrives — state-adjust-during-render pattern
+  const [lastWord, setLastWord] = useState(word);
+  if (word !== lastWord) {
+    setLastWord(word);
+    setAiOpen(false);
+  }
+
   return (
     <AnimatePresence>
       {open && (
@@ -178,7 +189,24 @@ export function ResultModal({
               ) : null}
 
               {/* AI explanation */}
-              {showAi && word ? <WordExplain word={word} /> : null}
+              {pendingSync ? (
+                <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-[11px] text-amber-300">
+                  Offline — result saved. XP will sync automatically when connection returns.
+                </div>
+              ) : null}
+              {showAi && word ? (
+                aiOpen ? (
+                  <WordExplain word={word} />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setAiOpen(true)}
+                    className="w-full glass rounded-xl p-3 text-xs font-semibold text-teal flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform"
+                  >
+                    ✨ What does “{word}” mean?
+                  </button>
+                )
+              ) : null}
 
               {/* actions */}
               <div className="flex gap-2 pt-1">

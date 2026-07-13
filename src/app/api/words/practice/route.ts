@@ -1,15 +1,20 @@
-// GET /api/words/practice — returns a new practice word session (opaque seed)
+// GET /api/words/practice — new practice session as a signed token. 0 DB queries.
 import { NextResponse } from "next/server";
-import { createPracticeSession } from "@/lib/word-session";
+import { signGameToken, newSeed } from "@/lib/game-token";
+import { randomFromPool } from "@/lib/words";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const session = createPracticeSession();
-  return NextResponse.json({
-    seed: session.seed,
+  const token = signGameToken({
+    seed: newSeed("P"),
+    word: randomFromPool("daily-normal"),
     mode: "practice",
-    maxGuesses: session.maxGuesses,
-    wordLength: 5,
+    maxGuesses: 6,
+    guessesUsed: 0,
+    won: false,
+    finished: false,
+    createdAt: Date.now(),
   });
+  return NextResponse.json({ token, mode: "practice", maxGuesses: 6, wordLength: 5 });
 }

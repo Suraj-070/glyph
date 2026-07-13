@@ -58,8 +58,8 @@ export function PartyView() {
     botTimers.current.forEach(clearTimeout);
     botTimers.current = [];
     try {
-      const sess = await api<{ seed: string; maxGuesses: number }>("/api/words/practice");
-      setSeed(sess.seed);
+      const sess = await api<{ token: string; maxGuesses: number }>("/api/words/practice");
+      setSeed(sess.token);
       setMaxGuesses(sess.maxGuesses);
       setStartedAt(Date.now());
       // init bots
@@ -154,7 +154,7 @@ export function PartyView() {
         await api("/api/game/submit", {
           method: "POST",
           body: JSON.stringify({
-            seed,
+            token: game.getToken(),
             mode: "practice",
             guessesUsed: r.guessesUsed,
             won: r.won,
@@ -265,7 +265,7 @@ export function PartyView() {
           <Loader2 className="h-6 w-6 animate-spin text-violet" />
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-3 sm:gap-6">
           {/* board */}
           <div className="flex flex-col items-center gap-4">
             {game.error ? (

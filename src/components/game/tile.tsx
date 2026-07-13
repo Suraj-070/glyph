@@ -1,25 +1,24 @@
 "use client";
-import { motion } from "framer-motion";
+// CSS-only animations — framer-motion removed: per-tile motion components caused
+// mobile jank (same fix as ShiftTracker). Flip stagger via animation-delay.
 import type { TileStatus } from "@/lib/types";
+import { classNames } from "@/lib/api";
 
 interface TileProps {
   letter?: string;
   status: TileStatus;
-  // index within the row, used for staggered flip delay
   index?: number;
-  // whether this row is currently being submitted (trigger flip)
   reveal?: boolean;
   size?: "sm" | "md" | "lg";
-  // for opponent board: no letters shown
   hideLetter?: boolean;
-  // pop animation when typing
   pop?: boolean;
 }
 
+// Responsive: smaller tiles on phones so 6 rows + keyboard fit one viewport
 const SIZES = {
-  sm: "w-9 h-9 text-base rounded-md",
-  md: "w-14 h-14 text-2xl rounded-lg",
-  lg: "w-16 h-16 text-3xl rounded-lg",
+  sm: "w-8 h-8 text-sm sm:w-9 sm:h-9 sm:text-base rounded-md",
+  md: "w-[11.5vw] h-[11.5vw] max-w-14 max-h-14 text-xl sm:w-14 sm:h-14 sm:text-2xl rounded-lg",
+  lg: "w-14 h-14 text-2xl sm:w-16 sm:h-16 sm:text-3xl rounded-lg",
 };
 
 export function Tile({
@@ -42,32 +41,21 @@ export function Tile({
       ? "tile-tbd"
       : "tile-empty";
 
-  // Flip animation only when revealing a finalized result
-  const shouldFlip = reveal && (status === "correct" || status === "present" || status === "absent");
+  const shouldFlip =
+    reveal && (status === "correct" || status === "present" || status === "absent");
 
   return (
-    <motion.div
-      className={`relative flex items-center justify-center font-bold border-2 select-none ${SIZES[size]} ${statusClass}`}
-      animate={
-        shouldFlip
-          ? { rotateX: [0, 90, 0] }
-          : pop
-          ? { scale: [1, 1.12, 1] }
-          : { rotateX: 0, scale: 1 }
-      }
-      transition={
-        shouldFlip
-          ? { duration: 0.5, delay: index * 0.18, ease: "easeInOut" }
-          : pop
-          ? { duration: 0.12 }
-          : { duration: 0.15 }
-      }
-      style={{ transformStyle: "preserve-3d" }}
+    <div
+      className={classNames(
+        "relative flex items-center justify-center font-bold border-2 select-none",
+        SIZES[size],
+        statusClass,
+        shouldFlip && "animate-tile-flip",
+        !shouldFlip && pop && "animate-tile-pop"
+      )}
+      style={shouldFlip ? { animationDelay: `${index * 0.14}s` } : undefined}
     >
-      <span className={hideLetter ? "opacity-0" : "opacity-100"}>
-        {letter || ""}
-      </span>
-      {/* For opponent color-only board, show a subtle glyph when there is a status */}
+      <span className={hideLetter ? "opacity-0" : "opacity-100"}>{letter || ""}</span>
       {hideLetter && (status === "correct" || status === "present") ? (
         <span className="absolute inset-0 flex items-center justify-center opacity-90">
           {status === "correct" ? (
@@ -79,6 +67,6 @@ export function Tile({
           )}
         </span>
       ) : null}
-    </motion.div>
+    </div>
   );
 }

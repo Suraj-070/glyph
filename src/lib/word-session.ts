@@ -1,25 +1,26 @@
-// GLYPH — server-side word session manager
-// Secret words live ONLY here (in-memory), keyed by an opaque seed token.
-// Clients never receive the raw word during play; they get a seed and submit
-// guesses to /api/words/validate which returns color results.
-import { randomAnswer, dailyWordForDate, dailyTypeForDate } from "./words";
+// GLYPH — server-side word session manager (DB-backed, serverless-safe)
+// Secret words live ONLY in the WordSession table, keyed by an opaque seed.
+// Clients never receive the raw word during play; they submit guesses to
+// /api/words/validate which evaluates server-side and records the outcome.
+import { db } from "./db";
+import { randomFromPool, dailyWordForDate, dailyTypeForDate } from "./words";
+import { randomUUID } from "crypto";
 
 export interface WordSession {
   seed: string;
   word: string;
   mode: string; // classic | practice | duel
-  dailyType?: string;
-  dailyDate?: string;
+  dailyType?: string | null;
+  dailyDate?: string | null;
   maxGuesses: number;
-  createdAt: number;
+  guessesUsed: number;
+  won: boolean;
+  finished: boolean;
+  consumed: boolean;
+  createdAt: Date;
 }
 
-// Persist across hot reloads in dev
-const g = globalThis as unknown as {
-  __glyphSessions?: Map<string, WordSession>;
-};
-const sessions: Map<string, WordSession> =
-  g.__glyphSessions ?? (g.__glyphSessions = new Map());
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24; // 24h
 
 function todayStr(d = new Date()): string {
   const y = d.getFullYear();
@@ -29,75 +30,94 @@ function todayStr(d = new Date()): string {
 }
 
 function genSeed(): string {
-  return (
-    Math.random().toString(36).slice(2, 10) +
-    Math.random().toString(36).slice(2, 6)
-  ).toUpperCase();
+  return randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase();
 }
 
-export function createDailySession(): WordSession {
+/** Best-effort prune: fire-and-forget, ~2% sampled — never blocks the hot path. */
+function pruneExpiredAsync(): void {
+  if (Math.random() > 0.02) return;
+  db.wordSession
+    .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - SESSION_TTL_MS) } } })
+    .catch(() => {});
+}
+
+export async function createDailySession(): Promise<WordSession> {
+  pruneExpiredAsync();
   const now = new Date();
   const word = dailyWordForDate(now);
   const dailyType = dailyTypeForDate(now);
   const maxGuesses = dailyType === "hardcore" ? 4 : 6;
   const seed = `D-${todayStr(now)}-${genSeed()}`;
-  const session: WordSession = {
-    seed,
-    word,
-    mode: "classic",
-    dailyType,
-    dailyDate: todayStr(now),
-    maxGuesses,
-    createdAt: Date.now(),
-  };
-  sessions.set(seed, session);
-  return session;
+  return db.wordSession.create({
+    data: { seed, word, mode: "classic", dailyType, dailyDate: todayStr(now), maxGuesses },
+  });
 }
 
-export function createPracticeSession(): WordSession {
-  const word = randomAnswer();
-  const seed = `P-${genSeed()}`;
-  const session: WordSession = {
-    seed,
-    word,
-    mode: "practice",
-    maxGuesses: 6,
-    createdAt: Date.now(),
-  };
-  sessions.set(seed, session);
-  return session;
+export async function createPracticeSession(): Promise<WordSession> {
+  pruneExpiredAsync();
+  return db.wordSession.create({
+    data: { seed: `P-${genSeed()}`, word: randomFromPool("daily-normal"), mode: "practice", maxGuesses: 6 },
+  });
 }
 
 // Duel: both players share the same wordSeed from the socket server.
 // First caller creates the word; the opponent's call returns the SAME word.
-const duelWords = new Map<string, string>();
-export function createOrGetDuelSession(wordSeed: string): WordSession {
-  let word = duelWords.get(wordSeed);
-  if (!word) {
-    word = randomAnswer();
-    duelWords.set(wordSeed, word);
-  }
+export async function createOrGetDuelSession(wordSeed: string): Promise<WordSession> {
   const seed = `L-${wordSeed}`;
-  // reuse a single session per wordSeed
-  const existing = sessions.get(seed);
+  const existing = await db.wordSession.findUnique({ where: { seed } });
   if (existing) return existing;
-  const session: WordSession = {
-    seed,
-    word,
-    mode: "duel",
-    maxGuesses: 6,
-    createdAt: Date.now(),
-  };
-  sessions.set(seed, session);
-  return session;
+  try {
+    return await db.wordSession.create({
+      data: { seed, word: randomFromPool("duel"), mode: "duel", maxGuesses: 6 },
+    });
+  } catch {
+    // race: opponent created it first — unique constraint means one word wins
+    const s = await db.wordSession.findUnique({ where: { seed } });
+    if (!s) throw new Error("Duel session create failed");
+    return s;
+  }
 }
 
-export function getSession(seed: string): WordSession | null {
-  return sessions.get(seed) ?? null;
+export async function getSession(seed: string): Promise<WordSession | null> {
+  if (!seed) return null;
+  const s = await db.wordSession.findUnique({ where: { seed } });
+  if (!s) return null;
+  if (Date.now() - s.createdAt.getTime() > SESSION_TTL_MS) return null;
+  return s;
 }
 
-export function revealWord(seed: string): string | null {
-  return sessions.get(seed)?.word ?? null;
+/**
+ * Record a validated guess outcome on the session (server-authoritative).
+ * Returns updated session or null if already finished.
+ */
+export async function recordGuess(
+  session: WordSession,
+  won: boolean
+): Promise<WordSession> {
+  if (session.finished) return session;
+  const guessesUsed = session.guessesUsed + 1;
+  const finished = won || guessesUsed >= session.maxGuesses;
+  return db.wordSession.update({
+    where: { seed: session.seed },
+    data: { guessesUsed, won, finished },
+  });
+}
+
+/** Mark session consumed by /api/game/submit (single-use). */
+export async function consumeSession(seed: string): Promise<WordSession | null> {
+  try {
+    return await db.wordSession.update({
+      where: { seed, consumed: false },
+      data: { consumed: true },
+    });
+  } catch {
+    return null; // already consumed or missing
+  }
+}
+
+export async function revealWord(seed: string): Promise<string | null> {
+  const s = await getSession(seed);
+  return s?.word ?? null;
 }
 
 export function todayDateStr(): string {

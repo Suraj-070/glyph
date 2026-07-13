@@ -1,0 +1,18 @@
+{
+  "version": "2.0.1",
+  "generatedAt": "2026-07-12T04:13:33.804700+00:00",
+  "counts": {
+    "answers": 1500,
+    "dictionary": 15948,
+    "pool_daily-normal": 424,
+    "pool_daily-challenge": 490,
+    "pool_daily-hardcore": 491,
+    "pool_duel": 494,
+    "pool_party": 294
+  },
+  "checksum": {
+    "answers": "70a5173631692b6a96445af2573f2e593b5ae046f62b23a0db84a99e31a8dd63",
+    "dictionary": "00740ef05d01bc6655ce3970c4f1c137e33c89ea2ad77ec01771ac9dd9a748ea"
+  },
+  "notes": "pools rebuilt by usability; meanings.json removed (empty defs); categories.json=usability map; stats trimmed"
+}

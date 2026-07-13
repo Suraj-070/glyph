@@ -1,8 +1,11 @@
 // POST /api/game/submit — record a completed game, update stats/streak/XP/achievements.
+// SERVER-AUTHORITATIVE: won / guessesUsed / duration come from the WordSession
+// (written by /api/words/validate), never trusted from the client.
+// Sessions are single-use (consumed flag) so a game can't be submitted twice.
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getCurrentPlayer } from "@/lib/session";
-import { getSession } from "@/lib/word-session";
+import { verifyGameToken } from "@/lib/game-token";
 import { computeXp, computeRankPoints } from "@/lib/game";
 import {
   getDailyHistory,
@@ -23,11 +26,8 @@ interface GuessInput {
 
 export async function POST(req: Request) {
   let body: {
-    seed: string;
+    token: string;
     mode: string;
-    guessesUsed: number;
-    won: boolean;
-    durationMs: number;
     opponentName?: string;
     roomId?: string;
     guesses?: GuessInput[];
@@ -38,13 +38,50 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const player = await getCurrentPlayer();
-  const session = getSession(body.seed);
+  const session = verifyGameToken((body.token || "").toString());
   if (!session) {
     return NextResponse.json({ error: "Invalid or expired session" }, { status: 404 });
   }
+  if (!session.finished) {
+    return NextResponse.json({ error: "Game not finished" }, { status: 409 });
+  }
 
-  const isDaily = body.mode === "classic" && !!session.dailyDate;
+  // Single-use dedupe: insert seed row; unique PK violation = already submitted.
+  const [player, consumed] = await Promise.all([
+    getCurrentPlayer(),
+    db.wordSession
+      .create({
+        data: {
+          seed: session.seed,
+          word: session.word,
+          mode: session.mode,
+          maxGuesses: session.maxGuesses,
+          guessesUsed: session.guessesUsed,
+          won: session.won,
+          finished: true,
+          consumed: true,
+        },
+      })
+      .then(() => true)
+      .catch(() => false),
+  ]);
+  if (!consumed) {
+    return NextResponse.json({ error: "Game already submitted" }, { status: 409 });
+  }
+
+  // Authoritative values from the signed token — client claims ignored.
+  const won = session.won;
+  const guessesUsed = session.guessesUsed;
+  const durationMs = Math.max(
+    0,
+    Math.min(Date.now() - session.createdAt, 1000 * 60 * 60 * 6)
+  );
+
+  const mode = ["classic", "practice", "duel", "party", "challenge"].includes(body.mode)
+    ? body.mode
+    : session.mode;
+
+  const isDaily = mode === "classic" && !!session.dailyDate;
   const dailyDate = session.dailyDate ?? null;
   const dailyType = session.dailyType ?? (isDaily ? dailyTypeForDate(new Date()) : "normal");
 
@@ -62,10 +99,6 @@ export async function POST(req: Request) {
     }
   }
 
-  const won = !!body.won;
-  const guessesUsed = Math.max(0, Math.min(session.maxGuesses, Number(body.guessesUsed) || 0));
-  const durationMs = Math.max(0, Number(body.durationMs) || 0);
-
   // Ensure profile exists
   let profile = player.profile;
   if (!profile) {
@@ -77,17 +110,26 @@ export async function POST(req: Request) {
     won,
     guessesUsed,
     maxGuesses: session.maxGuesses,
-    mode: body.mode,
+    mode,
     dailyType,
     durationMs,
   });
-  const rankDelta = computeRankPoints({ won, guessesUsed, mode: body.mode });
+  const rankDelta = computeRankPoints({ won, guessesUsed, mode });
 
-  // Create the game record
+  // Sanitize client-echoed guesses (display-only replay data): must match count.
+  const guesses =
+    body.guesses?.length === guessesUsed
+      ? body.guesses.slice(0, session.maxGuesses).map((g, i) => ({
+          text: (g.text || "").toString().slice(0, 5).toUpperCase(),
+          result: (g.result || "").toString().slice(0, 5),
+          attempt: i + 1,
+        }))
+      : [];
+
   const game = await db.game.create({
     data: {
       playerId: player.id,
-      mode: body.mode,
+      mode,
       wordLength: 5,
       word: session.word, // stored for replay, never sent during play
       won,
@@ -98,15 +140,7 @@ export async function POST(req: Request) {
       roomId: body.roomId ?? null,
       opponentName: body.opponentName ?? null,
       xpEarned,
-      guesses: body.guesses?.length
-        ? {
-            create: body.guesses.map((g) => ({
-              text: g.text,
-              result: g.result,
-              attempt: g.attempt,
-            })),
-          }
-        : undefined,
+      guesses: guesses.length ? { create: guesses } : undefined,
     },
   });
 
@@ -116,7 +150,7 @@ export async function POST(req: Request) {
       ? (`dist${guessesUsed}` as "dist1" | "dist2" | "dist3" | "dist4" | "dist5" | "dist6")
       : null;
 
-  const updatedProfile = await db.playerProfile.update({
+  const profileUpdatePromise = db.playerProfile.update({
     where: { playerId: player.id },
     data: {
       totalGames: { increment: 1 },
@@ -128,14 +162,60 @@ export async function POST(req: Request) {
         won && (profile.bestTimeMs === null || durationMs < profile.bestTimeMs)
           ? durationMs
           : profile.bestTimeMs,
-      ...(won && body.mode === "duel"
+      ...(won && mode === "duel"
         ? { duelWins: { increment: 1 } }
-        : !won && body.mode === "duel"
+        : !won && mode === "duel"
         ? { duelLosses: { increment: 1 } }
         : {}),
       ...(distField ? { [distField]: { increment: 1 } } : {}),
     },
   });
+
+  const xpUpdatePromise = db.player.update({
+    where: { id: player.id },
+    data: {
+      xp: { increment: xpEarned },
+      rankPoints: { increment: rankDelta },
+      status: "online",
+    },
+  });
+
+  const winStreakPromise =
+    mode === "duel"
+      ? db.playerProfile.update({
+          where: { playerId: player.id },
+          data: { winStreak: won ? (profile.winStreak ?? 0) + 1 : 0 },
+        })
+      : Promise.resolve(null);
+
+  const aggregatePromise =
+    isDaily && dailyDate
+      ? db.dailyChallenge
+          .upsert({
+            where: { date: dailyDate },
+            update: {
+              totalPlays: { increment: 1 },
+              totalWins: { increment: won ? 1 : 0 },
+              totalGuessSum: { increment: guessesUsed },
+            },
+            create: {
+              date: dailyDate,
+              word: session.word,
+              type: dailyType,
+              totalPlays: 1,
+              totalWins: won ? 1 : 0,
+              totalGuessSum: guessesUsed,
+            },
+          })
+          .catch(() => null)
+      : Promise.resolve(null);
+
+  const [updatedProfile] = await Promise.all([
+    profileUpdatePromise,
+    xpUpdatePromise,
+    winStreakPromise,
+    aggregatePromise,
+  ]);
 
   // Recompute streak (daily only changes it)
   let currentStreak = profile.currentStreak ?? 0;
@@ -150,71 +230,17 @@ export async function POST(req: Request) {
     });
   }
 
-  // XP & rank points
-  await db.player.update({
-    where: { id: player.id },
-    data: {
-      xp: { increment: xpEarned },
-      rankPoints: { increment: rankDelta },
-      status: "online",
-    },
-  });
-  await syncPlayerLevel(player.id);
-
-  // Win streak (multiplayer)
-  if (body.mode === "duel") {
-    if (won) {
-      const newWinStreak = (profile.winStreak ?? 0) + 1;
-      await db.playerProfile.update({
-        where: { playerId: player.id },
-        data: { winStreak: newWinStreak },
-      });
-    } else {
-      await db.playerProfile.update({
-        where: { playerId: player.id },
-        data: { winStreak: 0 },
-      });
-    }
-  }
-
-  // Daily challenge global aggregate
-  if (isDaily && dailyDate) {
-    try {
-      await db.dailyChallenge.upsert({
-        where: { date: dailyDate },
-        update: {
-          totalPlays: { increment: 1 },
-          totalWins: { increment: won ? 1 : 0 },
-          totalGuessSum: { increment: guessesUsed },
-        },
-        create: {
-          date: dailyDate,
-          word: session.word,
-          type: dailyType,
-          totalPlays: 1,
-          totalWins: won ? 1 : 0,
-          totalGuessSum: guessesUsed,
-        },
-      });
-    } catch {
-      /* ignore aggregate errors */
-    }
-  }
+  const updatedPlayer = await syncPlayerLevel(player.id);
 
   // Achievements
-  const duelWins = won && body.mode === "duel" ? (profile.duelWins ?? 0) + 1 : profile.duelWins ?? 0;
+  const duelWins = won && mode === "duel" ? (profile.duelWins ?? 0) + 1 : profile.duelWins ?? 0;
   const unlocked = await grantAchievements(player.id, {
     won,
     guessesUsed,
     durationMs,
-    mode: body.mode,
+    mode,
     currentStreak,
     duelWins,
-  });
-
-  const updatedPlayer = await db.player.findUnique({
-    where: { id: player.id },
-    select: { xp: true, level: true, rankPoints: true },
   });
 
   return NextResponse.json({

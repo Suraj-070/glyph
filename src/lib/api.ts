@@ -18,9 +18,21 @@ export async function api<T = unknown>(
     const msg =
       (data && typeof data === "object" && "error" in data && String((data as Record<string, unknown>).error)) ||
       `Request failed (${res.status})`;
-    throw new Error(msg);
+    const err = new Error(msg) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
   return data as T;
+}
+
+/** True when a caught error is a network failure (offline / DNS / aborted). */
+export function isNetworkError(e: unknown): boolean {
+  return e instanceof TypeError || (e instanceof Error && e.message === "Failed to fetch");
+}
+
+/** True when a caught api() error carries the given HTTP status. */
+export function hasStatus(e: unknown, status: number): boolean {
+  return e instanceof Error && (e as Error & { status?: number }).status === status;
 }
 
 export function classNames(...xs: (string | false | null | undefined)[]) {
