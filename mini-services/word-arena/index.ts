@@ -112,7 +112,7 @@ interface PresenceUpdatePayload {
 
 // ---------- Constants ----------
 
-const PORT = Number(process.env.ARENA_PORT || 3003)
+const PORT = Number(process.env.PORT || process.env.ARENA_PORT || 3003)
 const ROOM_CODE_LENGTH = 6
 const MAX_PLAYERS_DUEL = 2
 const MAX_CHAT_LENGTH = 200
