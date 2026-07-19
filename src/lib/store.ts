@@ -12,6 +12,9 @@ export type AppView =
   | "leaderboard"
   | "howto";
 
+// Views that get the fullscreen gaming shell
+export const GAME_VIEWS: AppView[] = ["classic", "practice", "duel", "party"];
+
 interface PlayerSummary {
   id: string;
   username: string;
@@ -25,10 +28,10 @@ interface PlayerSummary {
 interface GlyphState {
   view: AppView;
   player: PlayerSummary | null;
-  // duel setup
   duelRoomId: string | null;
-  // refresh token for stats after games
   statsNonce: number;
+  // fullscreen gaming mode — true while in a GAME_VIEW
+  gamingMode: boolean;
   setView: (v: AppView) => void;
   setPlayer: (p: PlayerSummary | null) => void;
   startDuel: (roomId: string) => void;
@@ -40,8 +43,9 @@ export const useGlyph = create<GlyphState>((set) => ({
   player: null,
   duelRoomId: null,
   statsNonce: 0,
-  setView: (v) => set({ view: v }),
+  gamingMode: false,
+  setView: (v) => set({ view: v, gamingMode: GAME_VIEWS.includes(v) }),
   setPlayer: (p) => set({ player: p }),
-  startDuel: (roomId) => set({ duelRoomId: roomId, view: "duel" }),
+  startDuel: (roomId) => set({ duelRoomId: roomId, view: "duel", gamingMode: true }),
   bumpStats: () => set((s) => ({ statsNonce: s.statsNonce + 1 })),
 }));

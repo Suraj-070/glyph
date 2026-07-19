@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Sidebar, MobileNav } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { Footer } from "@/components/layout/footer";
+import { GameShell } from "@/components/layout/game-shell";
 import { DashboardView } from "@/components/views/dashboard-view";
 import { ClassicView } from "@/components/views/classic-view";
 import { PracticeView } from "@/components/views/practice-view";
@@ -14,13 +15,14 @@ import { LeaderboardView } from "@/components/views/leaderboard-view";
 import { HowToView } from "@/components/views/howto-view";
 import { AuthModal } from "@/components/auth/auth-modal";
 import type { SessionPlayer } from "@/components/auth/auth-modal";
-import { useGlyph } from "@/lib/store";
+import { useGlyph, GAME_VIEWS } from "@/lib/store";
 import { installSubmitFlusher } from "@/lib/game-persist";
 import { api } from "@/lib/api";
 import { levelForXp, xpProgress, rankForPoints } from "@/lib/types";
 
 export default function Page() {
   const view = useGlyph((s) => s.view);
+  const gamingMode = useGlyph((s) => s.gamingMode);
   const setPlayer = useGlyph((s) => s.setPlayer);
   const statsNonce = useGlyph((s) => s.statsNonce);
   const bumpStats = useGlyph((s) => s.bumpStats);
@@ -42,10 +44,7 @@ export default function Page() {
 
   useEffect(() => {
     let alive = true;
-    (async () => {
-      await loadSession();
-      if (alive) setReady(true);
-    })();
+    (async () => { await loadSession(); if (alive) setReady(true); })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -70,17 +69,13 @@ export default function Page() {
   const lastStatusRef = useRef<string | null>(null);
   useEffect(() => {
     if (!ready || !session) return;
-    const status = ["duel", "classic", "practice", "party"].includes(view) ? "playing" : "online";
+    const status = GAME_VIEWS.includes(view) ? "playing" : "online";
     if (lastStatusRef.current === status) return;
     lastStatusRef.current = status;
     api("/api/friends", { method: "POST", body: JSON.stringify({ status }) }).catch(() => {});
   }, [view, ready, session]);
 
-  const handleAuthSuccess = (player: SessionPlayer) => {
-    setSession(player);
-    setPlayer(player);
-  };
-
+  const handleAuthSuccess = (player: SessionPlayer) => { setSession(player); setPlayer(player); };
   const handleLogout = async () => {
     await api("/api/auth/logout", { method: "POST" }).catch(() => {});
     window.location.reload();
@@ -108,6 +103,47 @@ export default function Page() {
       })()
     : null;
 
+  // The animated game content block (reused in both shell modes)
+  const gameContent = (
+    <AnimatePresence mode="wait">
+      <motion.div
+        key={view}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -8 }}
+        transition={{ duration: 0.2 }}
+        className="h-full"
+      >
+        {view === "dashboard"   ? <DashboardView player={playerForTopbar} statsNonce={statsNonce} /> :
+         view === "classic"     ? <ClassicView /> :
+         view === "practice"    ? <PracticeView /> :
+         view === "duel"        ? <DuelView player={playerForViews} /> :
+         view === "party"       ? <PartyView /> :
+         view === "profile"     ? <ProfileView player={playerForViews} statsNonce={statsNonce} /> :
+         view === "leaderboard" ? <LeaderboardView statsNonce={statsNonce} /> :
+                                  <HowToView />}
+      </motion.div>
+    </AnimatePresence>
+  );
+
+  // ── GAMING MODE — fullscreen shell, no sidebar/topbar/footer ──
+  if (gamingMode) {
+    return (
+      <>
+        <GameShell player={playerForTopbar}>
+          {gameContent}
+        </GameShell>
+        <AuthModal
+          open={authOpen}
+          defaultTab={authTab}
+          onClose={() => setAuthOpen(false)}
+          onSuccess={handleAuthSuccess}
+        />
+      </>
+    );
+  }
+
+  // ── NORMAL MODE — sidebar + topbar + footer ──
   return (
     <div className="min-h-screen flex flex-col">
       <div className="flex flex-1">
@@ -120,39 +156,12 @@ export default function Page() {
             onLogout={handleLogout}
           />
           <main className="flex-1 pb-24 lg:pb-0">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={view}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.25 }}
-              >
-                {view === "dashboard" ? (
-                  <DashboardView player={playerForTopbar} statsNonce={statsNonce} />
-                ) : view === "classic" ? (
-                  <ClassicView />
-                ) : view === "practice" ? (
-                  <PracticeView />
-                ) : view === "duel" ? (
-                  <DuelView player={playerForViews} />
-                ) : view === "party" ? (
-                  <PartyView />
-                ) : view === "profile" ? (
-                  <ProfileView player={playerForViews} statsNonce={statsNonce} />
-                ) : view === "leaderboard" ? (
-                  <LeaderboardView statsNonce={statsNonce} />
-                ) : (
-                  <HowToView />
-                )}
-              </motion.div>
-            </AnimatePresence>
+            {gameContent}
           </main>
           <Footer />
         </div>
       </div>
       <MobileNav />
-
       <AuthModal
         open={authOpen}
         defaultTab={authTab}

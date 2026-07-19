@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { RefreshCw, Lightbulb, ArrowLeft, Target, Dumbbell } from "lucide-react";
+import { RefreshCw, Lightbulb, Target, Dumbbell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { WordleBoard } from "@/components/game/wordle-board";
 import { WordleKeyboard } from "@/components/game/wordle-keyboard";
@@ -264,9 +264,6 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
     <div className="px-4 sm:px-6 py-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => setView("dashboard")}>
-            <ArrowLeft className="h-4 w-4 mr-1" /> Back
-          </Button>
           <div className="flex items-center gap-2">
             <div className="h-9 w-9 rounded-lg bg-teal/15 text-teal flex items-center justify-center">
               <Icon className="h-4 w-4" />

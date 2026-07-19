@@ -5,7 +5,6 @@ import {
   Swords,
   Users,
   Bot,
-  ArrowLeft,
   Copy,
   Check,
   Send,
@@ -50,7 +49,6 @@ const REACTIONS = [
 ];
 
 export function DuelView({ player }: DuelViewProps) {
-  const setView = useGlyph((s) => s.setView);
   const bumpStats = useGlyph((s) => s.bumpStats);
   const duel = useDuel({ player });
   const [joinCode, setJoinCode] = useState("");
@@ -228,9 +226,7 @@ export function DuelView({ player }: DuelViewProps) {
   if (duel.phase === "lobby") {
     return (
       <div className="px-4 sm:px-6 py-6 max-w-4xl mx-auto">
-        <Button variant="ghost" size="sm" onClick={() => setView("dashboard")} className="mb-4">
-          <ArrowLeft className="h-4 w-4 mr-1" /> Back
-        </Button>
+
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -343,9 +339,7 @@ export function DuelView({ player }: DuelViewProps) {
   if (duel.phase === "waiting") {
     return (
       <div className="px-4 sm:px-6 py-6 max-w-2xl mx-auto">
-        <Button variant="ghost" size="sm" onClick={duel.reset} className="mb-4">
-          <ArrowLeft className="h-4 w-4 mr-1" /> Leave
-        </Button>
+
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -429,10 +423,7 @@ export function DuelView({ player }: DuelViewProps) {
       {/* top bar */}
       <div className="flex items-center justify-between mb-2 sm:mb-4 gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
-          <Button variant="ghost" size="sm" onClick={duel.reset} className="shrink-0 px-2">
-            <ArrowLeft className="h-4 w-4" />
-            <span className="hidden sm:inline ml-1">Exit</span>
-          </Button>
+
           {/* mobile: opponent bubble lives in the bar — no overlap with title */}
           <OpponentBubble
             name={duel.opponent?.name ?? "Opponent"}
