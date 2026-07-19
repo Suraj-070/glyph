@@ -4,7 +4,11 @@
 // Cheat-proof: word AES-encrypted, state HMAC-signed — client can't read or forge.
 import { createHmac, createCipheriv, createDecipheriv, randomBytes, createHash, timingSafeEqual } from "crypto";
 
-const SECRET = process.env.GAME_TOKEN_SECRET || process.env.NEXTAUTH_SECRET || "glyph-dev-secret-change-me";
+const _SECRET = process.env.GAME_TOKEN_SECRET ?? process.env.NEXTAUTH_SECRET;
+if (!_SECRET && process.env.NODE_ENV === "production") {
+  throw new Error("GAME_TOKEN_SECRET (or NEXTAUTH_SECRET) env var must be set in production");
+}
+const SECRET = _SECRET ?? "glyph-dev-secret-change-me";
 const KEY = createHash("sha256").update(SECRET).digest(); // 32B AES key
 
 export interface GameTokenState {

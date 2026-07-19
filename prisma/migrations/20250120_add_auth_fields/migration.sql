@@ -1,0 +1,4 @@
+-- Add auth fields to Player
+ALTER TABLE "Player" ADD COLUMN IF NOT EXISTS "email" TEXT UNIQUE;
+ALTER TABLE "Player" ADD COLUMN IF NOT EXISTS "passwordHash" TEXT;
+ALTER TABLE "Player" ADD COLUMN IF NOT EXISTS "authProvider" TEXT NOT NULL DEFAULT 'guest';

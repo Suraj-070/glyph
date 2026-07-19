@@ -1,4 +1,4 @@
-// GET /api/session — get or create the local player (cookie-based)
+// GET /api/session — get current player (guest or registered)
 import { NextResponse } from "next/server";
 import { getCurrentPlayer } from "@/lib/session";
 import { levelForXp } from "@/lib/types";
@@ -11,9 +11,11 @@ export async function GET() {
     id: player.id,
     username: player.username,
     avatarSeed: player.avatarSeed,
+    email: player.email ?? null,
     xp: player.xp,
     level: player.level || levelForXp(player.xp),
     rankPoints: player.rankPoints,
     status: player.status,
+    authProvider: player.authProvider ?? "guest",
   });
 }

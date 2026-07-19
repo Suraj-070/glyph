@@ -1,5 +1,4 @@
 // GLYPH — Futuristic multiplayer Wordle platform
-// Prisma schema (SQLite)
 
 generator client {
   provider = "prisma-client-js"
@@ -7,23 +6,23 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  url       = env("DATABASE_URL")   // Supabase pooled (6543, pgbouncer=true)
-  directUrl = env("DIRECT_URL")     // Supabase direct (5432) for migrations
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
-// ---- Server-side word sessions (replaces in-memory Map; serverless-safe) ----
+// ---- Server-side word sessions ----
 
 model WordSession {
   seed        String   @id
   word        String
-  mode        String   // classic | practice | duel
+  mode        String
   dailyType   String?
   dailyDate   String?
   maxGuesses  Int      @default(6)
   guessesUsed Int      @default(0)
   won         Boolean  @default(false)
   finished    Boolean  @default(false)
-  consumed    Boolean  @default(false) // submitted to /api/game/submit
+  consumed    Boolean  @default(false)
   createdAt   DateTime @default(now())
 
   @@index([createdAt])
@@ -35,20 +34,23 @@ model Player {
   id           String   @id @default(cuid())
   username     String   @unique
   avatarSeed   String   @default("glyph")
+  // Auth fields
+  email        String?  @unique
+  passwordHash String?
+  authProvider String   @default("guest") // guest | credentials | google
   xp           Int      @default(0)
   level        Int      @default(1)
   rankPoints   Int      @default(0)
-  // presence (transient, mirrored to DB for cross-tab demo)
-  status       String   @default("offline") // online | idle | playing | offline
+  status       String   @default("offline")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  profile      PlayerProfile?
-  games        Game[]
-  achievements Achievement[]
-  streakFreezes StreakFreeze[]
-  sentFriends  Friendship[]  @relation("FriendshipSender")
-  receivedFriends Friendship[] @relation("FriendshipReceiver")
+  profile         PlayerProfile?
+  games           Game[]
+  achievements    Achievement[]
+  streakFreezes   StreakFreeze[]
+  sentFriends     Friendship[]   @relation("FriendshipSender")
+  receivedFriends Friendship[]   @relation("FriendshipReceiver")
 }
 
 model PlayerProfile {
@@ -65,14 +67,12 @@ model PlayerProfile {
   totalGuesses    Int      @default(0)
   totalDurationMs Int      @default(0)
   bestTimeMs      Int?
-  // guess distribution buckets (1..6)
   dist1           Int      @default(0)
   dist2           Int      @default(0)
   dist3           Int      @default(0)
   dist4           Int      @default(0)
   dist5           Int      @default(0)
   dist6           Int      @default(0)
-  // duel-specific
   duelWins        Int      @default(0)
   duelLosses      Int      @default(0)
   updatedAt       DateTime @updatedAt
@@ -89,39 +89,37 @@ model StreakFreeze {
 // ---- Daily challenges ----
 
 model DailyChallenge {
-  id        String   @id @default(cuid())
-  date      String   @unique // YYYY-MM-DD
-  word      String
-  type      String   @default("normal") // normal | challenge | hardcore
-  rewardXp  Int      @default(100)
-  // aggregate global stats
-  totalPlays     Int @default(0)
-  totalWins      Int @default(0)
-  totalGuessSum  Int @default(0)
-  createdAt DateTime @default(now())
+  id            String   @id @default(cuid())
+  date          String   @unique
+  word          String
+  type          String   @default("normal")
+  rewardXp      Int      @default(100)
+  totalPlays    Int      @default(0)
+  totalWins     Int      @default(0)
+  totalGuessSum Int      @default(0)
+  createdAt     DateTime @default(now())
 }
 
 // ---- Games & Guesses ----
 
 model Game {
-  id          String   @id @default(cuid())
-  playerId    String
-  player      Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  mode        String   // classic | practice | duel | party | challenge
-  wordLength  Int      @default(5)
-  // we never expose the raw word to the client during play; we only store it for replay
-  word        String
-  won         Boolean  @default(false)
-  guessesUsed Int      @default(0)
-  durationMs  Int      @default(0)
-  isDaily     Boolean  @default(false)
-  dailyDate   String?
-  roomId      String?
+  id           String   @id @default(cuid())
+  playerId     String
+  player       Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  mode         String
+  wordLength   Int      @default(5)
+  word         String
+  won          Boolean  @default(false)
+  guessesUsed  Int      @default(0)
+  durationMs   Int      @default(0)
+  isDaily      Boolean  @default(false)
+  dailyDate    String?
+  roomId       String?
   opponentName String?
-  xpEarned    Int      @default(0)
-  completedAt DateTime @default(now())
+  xpEarned     Int      @default(0)
+  completedAt  DateTime @default(now())
 
-  guesses     Guess[]
+  guesses Guess[]
 }
 
 model Guess {
@@ -129,7 +127,6 @@ model Guess {
   gameId    String
   game      Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
   text      String
-  // color pattern as string of c/p/a (correct/present/absent)
   result    String
   attempt   Int
   createdAt DateTime @default(now())
@@ -138,23 +135,25 @@ model Guess {
 // ---- Achievements ----
 
 model Achievement {
-  id        String   @id @default(cuid())
-  playerId  String
-  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  type      String   // first_win | streak_7 | streak_30 | streak_100 | speed_demon | sharpshooter | comeback | duel_master | challenge_champ ...
+  id         String   @id @default(cuid())
+  playerId   String
+  player     Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  type       String
   unlockedAt DateTime @default(now())
+
   @@unique([playerId, type])
 }
 
 // ---- Friends ----
 
 model Friendship {
-  id        String   @id @default(cuid())
-  senderId  String
-  sender    Player   @relation("FriendshipSender", fields: [senderId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  senderId   String
+  sender     Player   @relation("FriendshipSender", fields: [senderId], references: [id], onDelete: Cascade)
   receiverId String
-  receiver  Player   @relation("FriendshipReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
-  status    String   @default("pending") // pending | accepted
-  createdAt DateTime @default(now())
+  receiver   Player   @relation("FriendshipReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  status     String   @default("pending")
+  createdAt  DateTime @default(now())
+
   @@unique([senderId, receiverId])
 }

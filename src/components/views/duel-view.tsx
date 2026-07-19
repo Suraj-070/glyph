@@ -167,21 +167,24 @@ export function DuelView({ player }: DuelViewProps) {
     gameTokenRef.current = game.getToken();
   });
 
-  // opponent forfeited mid-match -> instant win for us
+  // BUG FIX #2: add all stale-closure deps
   useEffect(() => {
     if (duel.opponentForfeited && game.status === "playing" && !result) {
+      const guessCount = game.guesses.length;
+      const duration = duel.matchStartedAt ? Date.now() - duel.matchStartedAt : 0;
       setResult({
         open: true,
         won: true,
         word: "",
-        guessesUsed: game.guesses.length,
-        durationMs: duel.matchStartedAt ? Date.now() - duel.matchStartedAt : 0,
+        guessesUsed: guessCount,
+        durationMs: duration,
         opponentWon: false,
         opponentName: duel.opponent?.name,
       });
-      duel.reportMyFinish(true, Math.max(1, game.guesses.length), 0);
+      duel.reportMyFinish(true, Math.max(1, guessCount), duration);
     }
-  }, [duel.opponentForfeited]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [duel.opponentForfeited, game.status, game.guesses.length, result]);
 
   // report typing when current changes
   useEffect(() => {
@@ -662,10 +665,14 @@ export function DuelView({ player }: DuelViewProps) {
         rankDelta={result?.rankDelta}
         opponentName={result?.opponentName}
         opponentWon={result?.opponentWon}
-        onRematch={() => {
+        onRematch={async () => {
+          // BUG FIX REMATCH: clear result first, then reset duel state, then start bot
+          // Using async to ensure reset completes before quickMatch
           setResult(null);
           duel.reset();
-          setTimeout(() => duel.quickMatch(), 100);
+          // Small tick to let state flush before starting a new match
+          await new Promise((r) => setTimeout(r, 50));
+          duel.quickMatch();
         }}
         onClose={() => {
           setResult(null);

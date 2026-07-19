@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { RefreshCw, Lightbulb, ArrowLeft, Target, Dumbbell } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -56,21 +56,20 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
     pendingSync?: boolean;
   } | null>(null);
 
+  // BUG FIX #1: use a ref for the token so onGameEnd doesn't have a stale closure
+  // (game hook is defined after onGameEnd, so game.getToken() would be undefined)
+  const gameTokenRef = useRef<string | null>(null);
+
   const fetchSession = useCallback(async (forceNew = false) => {
     setLoading(true);
     setResult(null);
     setExpired(false);
     try {
-      // refresh-proof: resume an in-progress game from this browser session
       if (!forceNew) {
         const snap = loadSnapshot(mode);
         if (snap && snap.guesses.length > 0 && snap.guesses.length < snap.maxGuesses) {
           setResume({ token: snap.token, guesses: snap.guesses, startedAt: snap.startedAt });
-          setSession({
-            token: snap.token,
-            maxGuesses: snap.maxGuesses,
-            dailyDate: snap.dailyDate,
-          });
+          setSession({ token: snap.token, maxGuesses: snap.maxGuesses, dailyDate: snap.dailyDate });
           setStartedAt(snap.startedAt);
           setLoading(false);
           return;
@@ -79,7 +78,6 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
       clearSnapshot(mode);
       setResume(null);
       if (mode === "classic") {
-        // fairness: already finished today's daily -> show result, no replay board
         const ds = await api<{ played: boolean; won: boolean; guessesUsed: number; word: string | null; xpEarned: number }>(
           "/api/game/daily-status"
         ).catch(() => null);
@@ -110,21 +108,19 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
     }
   }, [mode]);
 
-  useEffect(() => {
-    fetchSession();
-  }, [fetchSession]);
+  useEffect(() => { fetchSession(); }, [fetchSession]);
 
   const onGameEnd = useCallback(
     async (r: GameEndResult) => {
       clearSnapshot(mode);
       const guessesPayload = r.guesses.map((g, i) => ({
         text: g.guess,
-        result: g.statuses
-          .map((s) => (s === "correct" ? "c" : s === "present" ? "p" : "a"))
-          .join(""),
+        result: g.statuses.map((s) => (s === "correct" ? "c" : s === "present" ? "p" : "a")).join(""),
         attempt: i + 1,
       }));
       try {
+        // BUG FIX #1: use ref instead of game.getToken() (game not in scope here)
+        const token = gameTokenRef.current;
         const res = await api<{
           won: boolean;
           word: string;
@@ -136,7 +132,7 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
         }>("/api/game/submit", {
           method: "POST",
           body: JSON.stringify({
-            token: game.getToken(),
+            token,
             mode,
             guessesUsed: r.guessesUsed,
             won: r.won,
@@ -158,11 +154,9 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
         });
         bumpStats();
       } catch (e) {
-        // offline / server hiccup: queue it — XP syncs automatically later,
-        // server-side seed dedupe makes retries safe
         const httpStatus = (e as Error & { status?: number }).status;
         if (httpStatus === undefined) {
-          const t = game.getToken();
+          const t = gameTokenRef.current;
           if (t) queueSubmit({ token: t, mode, guesses: guessesPayload });
         }
         setResult({
@@ -176,7 +170,8 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
         });
       }
     },
-    [session, mode, bumpStats]
+    [mode, bumpStats]
+    // NOTE: session removed from deps — we use gameTokenRef instead of game.getToken()
   );
 
   const game = useWordleGame({
@@ -187,11 +182,13 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
     onGameEnd,
     onSessionExpired: () => setExpired(true),
     onGuessFinalized: (_g, _attempt, _won, finished) => {
-      // refresh-proof snapshot after every revealed guess
-      if (finished) {
-        clearSnapshot(mode);
-        return;
-      }
+      // BUG FIX #1: keep ref in sync on every guess
+      gameTokenRef.current = game.getToken();
+
+      if (finished) { clearSnapshot(mode); return; }
+
+      // BUG FIX #9: use r.guesses from the callback rather than stale game.guesses
+      // We compute newGuesses from the snapshot that already has _g appended via the hook
       const t = game.getToken();
       if (t && session) {
         saveSnapshot(mode, {
@@ -205,19 +202,20 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
     },
   });
 
+  // Keep ref synced after every render (catches the initial seed set)
+  useEffect(() => {
+    gameTokenRef.current = game.getToken();
+  });
+
   const closeResult = () => {
     setResult((r) => (r ? { ...r, open: false } : null));
-    if (mode === "practice") {
-      fetchSession(true);
-    }
+    if (mode === "practice") fetchSession(true);
   };
 
   if (expired) {
     return (
       <div className="px-6 py-24 text-center space-y-4">
-        <p className="text-sm text-muted-foreground">
-          This game session expired. Start a fresh one?
-        </p>
+        <p className="text-sm text-muted-foreground">This game session expired. Start a fresh one?</p>
         <Button onClick={() => fetchSession(true)}>New game</Button>
       </div>
     );
@@ -225,8 +223,7 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
 
   const share = () => {
     if (!result || !session) return;
-    const emoji = (s: string) =>
-      s === "c" ? "🟩" : s === "p" ? "🟨" : "⬛";
+    const emoji = (s: string) => s === "c" ? "🟩" : s === "p" ? "🟨" : "⬛";
     const grid = game.guesses
       .map((g) => g.statuses.map((st) => emoji(st === "correct" ? "c" : st === "present" ? "p" : "a")).join(""))
       .join("\n");
@@ -253,7 +250,7 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
       <div className="flex items-center justify-center py-24">
         <div className="text-center">
           <p className="text-sm text-muted-foreground mb-3">Failed to load the word session.</p>
-          <Button onClick={fetchSession} variant="outline">
+          <Button onClick={() => fetchSession()} variant="outline">
             <RefreshCw className="h-4 w-4 mr-2" /> Retry
           </Button>
         </div>
@@ -265,7 +262,6 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
 
   return (
     <div className="px-4 sm:px-6 py-6 max-w-5xl mx-auto">
-      {/* header */}
       <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => setView("dashboard")}>
@@ -292,7 +288,7 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
         <div className="flex items-center gap-2">
           <GameTimer startedAt={startedAt} running={game.status === "playing"} />
           {mode === "practice" ? (
-            <Button variant="outline" size="sm" onClick={fetchSession}>
+            <Button variant="outline" size="sm" onClick={() => fetchSession(true)}>
               <RefreshCw className="h-4 w-4 mr-1" /> New word
             </Button>
           ) : null}
@@ -300,7 +296,6 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
-        {/* board + keyboard */}
         <div className="flex flex-col items-center gap-5">
           {game.error ? (
             <motion.div
@@ -325,7 +320,6 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
             keyStates={game.keyStates}
             disabled={game.status !== "playing"}
           />
-
           {mode === "practice" && game.status === "playing" ? (
             <div className="w-full max-w-lg">
               <PracticeHints token={session.token} />
@@ -333,7 +327,6 @@ export function SinglePlayerGame({ mode }: SinglePlayerGameProps) {
           ) : null}
         </div>
 
-        {/* side panel */}
         <div className="space-y-4">
           {game.status === "playing" ? (
             <div className="glass rounded-xl p-4">
@@ -392,25 +385,18 @@ function Row({ label, value, accent }: { label: string; value: string; accent?: 
   return (
     <div className="flex items-center justify-between">
       <span className="text-muted-foreground">{label}</span>
-      <span className="font-semibold" style={accent ? { color: accent } : undefined}>
-        {value}
-      </span>
+      <span className="font-semibold" style={accent ? { color: accent } : undefined}>{value}</span>
     </div>
   );
 }
 
 function PracticeHints({ token }: { token: string }) {
-  // hint panel needs the secret word, which only the server knows.
-  // We provide a button that reveals a hint via /api/ai/hint — but hint needs the word.
-  // For practice, expose a lightweight endpoint to get the word ONLY when game is practice + hint requested.
-  // To keep it secure-ish, we fetch the word via a dedicated reveal endpoint gated to practice mode.
   const [hint, setHint] = useState<string | null>(null);
   const [loading, setLoading] = useState<number | null>(null);
 
   const fetchHint = async (level: number) => {
     setLoading(level);
     try {
-      // get the practice word (practice-only reveal)
       const w = await api<{ word: string }>("/api/words/practice/reveal", {
         method: "POST",
         body: JSON.stringify({ token }),
@@ -444,9 +430,7 @@ function PracticeHints({ token }: { token: string }) {
         ))}
       </div>
       {hint ? (
-        <div className="w-full text-xs text-foreground/90 bg-white/5 rounded-lg px-3 py-2 mt-1">
-          {hint}
-        </div>
+        <div className="w-full text-xs text-foreground/90 bg-white/5 rounded-lg px-3 py-2 mt-1">{hint}</div>
       ) : null}
     </div>
   );

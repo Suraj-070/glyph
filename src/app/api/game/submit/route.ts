@@ -72,10 +72,15 @@ export async function POST(req: Request) {
   // Authoritative values from the signed token — client claims ignored.
   const won = session.won;
   const guessesUsed = session.guessesUsed;
-  const durationMs = Math.max(
-    0,
-    Math.min(Date.now() - session.createdAt, 1000 * 60 * 60 * 6)
-  );
+  // BUG FIX #8: cap by server elapsed but use body.durationMs when provided and reasonable.
+  // session.createdAt = when token was issued (page load), not when user started guessing.
+  const serverElapsed = Math.max(0, Date.now() - session.createdAt);
+  const clientMs = typeof (body as Record<string, unknown>).durationMs === "number"
+    ? Math.max(0, (body as unknown as { durationMs: number }).durationMs)
+    : null;
+  const durationMs = clientMs !== null
+    ? Math.min(clientMs, serverElapsed, 1000 * 60 * 60 * 6)
+    : Math.min(serverElapsed, 1000 * 60 * 60 * 6);
 
   const mode = ["classic", "practice", "duel", "party", "challenge"].includes(body.mode)
     ? body.mode
