@@ -469,12 +469,6 @@ io.on('connection', (socket: Socket) => {
   socket.on('error', (err: Error) => { logError(`socket error (${socket.id}):`, err?.message ?? err) })
 })
 
-function errMsg(err: unknown, fallback?: string): string {
-  if (err instanceof Error && err.message) return err.message
-  if (typeof err === 'string') return err
-  return fallback ?? 'Unknown error'
-}
-
 httpServer.listen(PORT, () => { log(`socket.io server running on port ${PORT}`) })
 
 function shutdown(signal: string): void {
