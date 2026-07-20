@@ -155,7 +155,16 @@ function errMsg(err: unknown, fallback?: string): string {
 
 // ---------- Server ----------
 
-const httpServer = createServer()
+const httpServer = createServer((req, res) => {
+  // Health check for Render — must respond 200 or service gets SIGTERMed
+  if (req.method === 'GET' && (req.url === '/' || req.url === '/health')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, rooms: rooms.size, players: players.size }))
+    return
+  }
+  res.writeHead(404)
+  res.end()
+})
 const io = new Server(httpServer, {
   path: '/socket.io',
   cors: { origin: '*', methods: ['GET', 'POST'] },
