@@ -238,13 +238,22 @@ export function DuelView({ player }: DuelViewProps) {
   const [invitedIds, setInvitedIds] = useState<Set<string>>(new Set());
 
   // Auto-join from global invite toast (sessionStorage handoff)
+  // Uses a ref so it retries whenever phase or player changes until it succeeds
+  const pendingInviteRef = useRef<string | null>(
+    typeof window !== "undefined" ? sessionStorage.getItem("glyph-pending-invite") : null
+  );
   useEffect(() => {
-    const pendingCode = sessionStorage.getItem("glyph-pending-invite");
-    if (pendingCode && player && duel.phase === "lobby") {
-      sessionStorage.removeItem("glyph-pending-invite");
-      duel.joinRoom(pendingCode);
+    // pick up from sessionStorage in case ref missed it
+    if (!pendingInviteRef.current) {
+      pendingInviteRef.current = sessionStorage.getItem("glyph-pending-invite");
     }
-  }, [duel.phase, player]);
+    if (pendingInviteRef.current && player && duel.phase === "lobby") {
+      const code = pendingInviteRef.current;
+      pendingInviteRef.current = null;
+      sessionStorage.removeItem("glyph-pending-invite");
+      duel.joinRoom(code);
+    }
+  });  // runs every render — cheap, safe, guarantees it fires once conditions are met
 
   // Reset invite state when leaving waiting room
   useEffect(() => {
