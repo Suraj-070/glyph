@@ -21,31 +21,36 @@ interface GameShellProps {
 }
 
 const VIEW_META: Record<AppView, { label: string; icon: React.ElementType; color: string }> = {
-  classic:     { label: "Daily Challenge",  icon: Target,   color: "text-teal"   },
-  practice:    { label: "Practice Arena",   icon: Dumbbell, color: "text-violet" },
+  classic:     { label: "Daily Challenge",  icon: Target,   color: "text-teal"    },
+  practice:    { label: "Practice Arena",   icon: Dumbbell, color: "text-violet"  },
   duel:        { label: "Real-time Duel",   icon: Swords,   color: "text-rose-400" },
-  party:       { label: "Party Mode",       icon: Users,    color: "text-amber"  },
-  dashboard:   { label: "Dashboard",        icon: Trophy,   color: "text-teal"   },
-  profile:     { label: "Profile",          icon: Trophy,   color: "text-teal"   },
-  leaderboard: { label: "Leaderboard",      icon: Trophy,   color: "text-amber"  },
-  howto:       { label: "How to Play",      icon: Trophy,   color: "text-violet" },
+  party:       { label: "Party Mode",       icon: Users,    color: "text-amber"   },
+  dashboard:   { label: "Dashboard",        icon: Trophy,   color: "text-teal"    },
+  profile:     { label: "Profile",          icon: Trophy,   color: "text-teal"    },
+  leaderboard: { label: "Leaderboard",      icon: Trophy,   color: "text-amber"   },
+  howto:       { label: "How to Play",      icon: Trophy,   color: "text-violet"  },
 };
 
 export function GameShell({ children, player }: GameShellProps) {
   const view = useGlyph((s) => s.view);
-  const setView = useGlyph((s) => s.setView);
+  const goBack = useGlyph((s) => s.goBack);
+  const prevView = useGlyph((s) => s.prevView);
   const [nativeFS, setNativeFS] = useState(false);
   const [hudVisible, setHudVisible] = useState(true);
   const [idle, setIdle] = useState(false);
 
   const meta = VIEW_META[view] ?? VIEW_META.classic;
+  const prevMeta = VIEW_META[prevView] ?? VIEW_META.dashboard;
   const Icon = meta.icon;
 
-  // Auto-hide HUD after 4 s of no movement (only in native fullscreen)
+  // Auto-hide HUD after 4s of no movement (only in native fullscreen)
   useEffect(() => {
     if (!nativeFS) { setHudVisible(true); setIdle(false); return; }
     let timer: ReturnType<typeof setTimeout>;
-    const reset = () => { setHudVisible(true); setIdle(false); clearTimeout(timer); timer = setTimeout(() => { setIdle(true); setHudVisible(false); }, 4000); };
+    const reset = () => {
+      setHudVisible(true); setIdle(false); clearTimeout(timer);
+      timer = setTimeout(() => { setIdle(true); setHudVisible(false); }, 4000);
+    };
     reset();
     window.addEventListener("mousemove", reset);
     window.addEventListener("keydown", reset);
@@ -73,14 +78,14 @@ export function GameShell({ children, player }: GameShellProps) {
     }
   };
 
-  const exitGame = () => {
+  const handleBack = () => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    setView("dashboard");
+    goBack();
   };
 
   return (
     <div className="relative flex flex-col w-full h-screen bg-background overflow-hidden">
-      {/* Ambient background glow — mode-specific color */}
+      {/* Ambient background glow */}
       <div
         className={classNames(
           "pointer-events-none absolute inset-0 opacity-[0.06]",
@@ -91,7 +96,7 @@ export function GameShell({ children, player }: GameShellProps) {
         )}
       />
 
-      {/* ── Gaming HUD (top bar) ── */}
+      {/* ── Gaming HUD ── */}
       <AnimatePresence>
         {hudVisible && (
           <motion.div
@@ -101,13 +106,14 @@ export function GameShell({ children, player }: GameShellProps) {
             transition={{ duration: 0.2 }}
             className="relative z-30 flex items-center gap-2 px-3 sm:px-5 py-2 border-b border-white/5 bg-black/30 backdrop-blur-md"
           >
-            {/* back */}
+            {/* BACK button — goes to previous view */}
             <button
-              onClick={exitGame}
-              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1.5 rounded-lg hover:bg-white/5"
+              onClick={handleBack}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1.5 rounded-lg hover:bg-white/5 group"
+              title={`Back to ${prevMeta.label}`}
             >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Exit</span>
+              <ArrowLeft className="h-3.5 w-3.5 group-hover:-translate-x-0.5 transition-transform" />
+              <span className="hidden sm:inline">Back</span>
             </button>
 
             <div className="w-px h-5 bg-white/10" />
@@ -158,7 +164,7 @@ export function GameShell({ children, player }: GameShellProps) {
         )}
       </AnimatePresence>
 
-      {/* ── Tap-to-reveal hint (native FS idle) ── */}
+      {/* Tap-to-reveal hint in native FS idle */}
       <AnimatePresence>
         {nativeFS && idle && (
           <motion.div
@@ -174,7 +180,7 @@ export function GameShell({ children, player }: GameShellProps) {
         )}
       </AnimatePresence>
 
-      {/* ── Game content ── */}
+      {/* Game content */}
       <div className="flex-1 overflow-y-auto scroll-glyph relative z-10">
         {children}
       </div>

@@ -215,7 +215,16 @@ export function useDuel({ player }: UseDuelOptions) {
       pushMessageRef.current({ id: Math.random().toString(36).slice(2), name: "System", avatarSeed: "glyph", content: `Room ${roomId} created. Share this code with a friend.`, type: "system", ts: Date.now() });
     });
     sock.on("room:state", (rs: { id: string; players: Array<{ id: string; name: string; avatarSeed: string }>; state: string }) => {
-      const others = rs.players.filter((p) => p.id !== socketRef.current?.id);
+      // DEFINITIVE FIX: filter out ourselves using BOTH app ID and username as fallbacks.
+      // The server stores Player.id = data.playerId (the app's player ID from DB/cookie).
+      // We match on id first, then username as a safety net in case IDs are mismatched.
+      const myAppId = playerRef.current?.id;
+      const myName = playerRef.current?.username;
+      const others = rs.players.filter((p) => {
+        if (myAppId && p.id === myAppId) return false;  // matched by app ID — it's us
+        if (myName && p.name === myName) return false;  // matched by name — it's us
+        return true;
+      });
       if (others.length > 0) {
         const o = others[0];
         setState((s) => ({
