@@ -237,6 +237,15 @@ export function DuelView({ player }: DuelViewProps) {
   const [onlineFriends, setOnlineFriends] = useState<Array<{ id: string; username: string; avatarSeed: string; status: string }>>([]);
   const [invitedIds, setInvitedIds] = useState<Set<string>>(new Set());
 
+  // Auto-join from global invite toast (sessionStorage handoff)
+  useEffect(() => {
+    const pendingCode = sessionStorage.getItem("glyph-pending-invite");
+    if (pendingCode && player && duel.phase === "lobby") {
+      sessionStorage.removeItem("glyph-pending-invite");
+      duel.joinRoom(pendingCode);
+    }
+  }, [duel.phase, player]);
+
   // Reset invite state when leaving waiting room
   useEffect(() => {
     if (duel.phase !== "waiting") { setInvitedIds(new Set()); setOnlineFriends([]); }

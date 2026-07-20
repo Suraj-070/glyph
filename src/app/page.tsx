@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { io } from "socket.io-client";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sidebar, MobileNav } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
@@ -18,6 +19,7 @@ import type { SessionPlayer } from "@/components/auth/auth-modal";
 import { useGlyph, GAME_VIEWS } from "@/lib/store";
 import { installSubmitFlusher } from "@/lib/game-persist";
 import { api } from "@/lib/api";
+import { Avatar } from "@/components/common/avatar";
 import { levelForXp, xpProgress, rankForPoints } from "@/lib/types";
 
 export default function Page() {
@@ -30,6 +32,8 @@ export default function Page() {
   const [ready, setReady] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [authTab, setAuthTab] = useState<"login" | "register">("login");
+  const [duelInvite, setDuelInvite] = useState<{ from: string; avatarSeed: string; roomCode: string } | null>(null);
+  const globalSocketRef = useRef<ReturnType<typeof io> | null>(null);
 
   const loadSession = async () => {
     try {
@@ -56,6 +60,21 @@ export default function Page() {
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsNonce, ready]);
+
+  // Global duel invite listener — works on ANY page
+  useEffect(() => {
+    if (!session) return;
+    const url = process.env.NEXT_PUBLIC_ARENA_URL || "http://localhost:3003";
+    const sock = io(url, { transports: ["websocket", "polling"] });
+    globalSocketRef.current = sock;
+    sock.on("connect", () => {
+      sock.emit("player:identify", { id: session.id, name: session.username, avatarSeed: session.avatarSeed });
+    });
+    sock.on("duel:invited", (p: { from: string; avatarSeed: string; roomCode: string }) => {
+      setDuelInvite(p);
+    });
+    return () => { sock.disconnect(); globalSocketRef.current = null; };
+  }, [session?.id]);
 
   useEffect(() => installSubmitFlusher(() => bumpStats()), [bumpStats]);
 
