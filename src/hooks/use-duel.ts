@@ -41,6 +41,13 @@ interface DuelState {
   opponentGraceUntil: number | null;
   opponentForfeited: boolean;
   isHost: boolean;
+  // duel invite from friend
+  duelInvite: { from: string; avatarSeed: string; roomCode: string } | null;
+  // rematch
+  rematchIncoming: { from: string; avatarSeed: string } | null;
+  rematchPending: boolean;   // we sent a request, waiting for response
+  rematchRejected: boolean;  // opponent said no
+  rematchExpired: boolean;   // timed out
 }
 
 const BOT_NAMES = [
@@ -117,6 +124,8 @@ const initialState: DuelState = {
   matchStartedAt: null, maxGuesses: 6, opponent: null, messages: [],
   reactions: [], presenceError: null, opponentGraceUntil: null,
   opponentForfeited: false, isHost: false,
+  duelInvite: null,
+  rematchIncoming: null, rematchPending: false, rematchRejected: false, rematchExpired: false,
 };
 
 export function useDuel({ player }: UseDuelOptions) {
@@ -202,6 +211,46 @@ export function useDuel({ player }: UseDuelOptions) {
     });
     sock.on("room:rejoined", () => pushMessageRef.current(systemMsg("Reconnected to the match")));
     sock.on("room:rejoin-failed", () => clearDuelSession());
+
+    // Rematch: opponent sent us a request
+    sock.on("rematch:incoming", (p: { from: string; avatarSeed: string }) => {
+      setState((s) => ({ ...s, rematchIncoming: { from: p.from, avatarSeed: p.avatarSeed }, rematchRejected: false, rematchExpired: false }));
+    });
+    // Both agreed — server fires fresh seed, restart in same room
+    sock.on("rematch:start", async (payload: { wordSeed: string; matchStartedAt: number; maxGuesses: number }) => {
+      try {
+        const { api } = await import("@/lib/api");
+        const session = await api<{ token: string; maxGuesses: number }>("/api/words/duel", {
+          method: "POST",
+          body: JSON.stringify({ wordSeed: payload.wordSeed }),
+        });
+        setState((s) => ({
+          ...s, phase: "playing", duelSeed: session.token,
+          matchStartedAt: payload.matchStartedAt, maxGuesses: payload.maxGuesses,
+          rematchIncoming: null, rematchPending: false, rematchRejected: false, rematchExpired: false,
+          opponent: s.opponent ? { ...s.opponent, rows: [], currentAttempt: 0, won: false, lost: false, typing: false } : s.opponent,
+        }));
+      } catch {
+        setState((s) => ({ ...s, presenceError: "Failed to start rematch." }));
+      }
+    });
+    // Opponent said no
+    sock.on("rematch:rejected", (p: { by: string }) => {
+      setState((s) => ({ ...s, rematchPending: false, rematchRejected: true, rematchIncoming: null }));
+      pushMessageRef.current(systemMsg(`${p.by} declined the rematch.`));
+    });
+    // Our request timed out
+    sock.on("rematch:expired", () => {
+      setState((s) => ({ ...s, rematchPending: false, rematchExpired: true }));
+    });
+
+    // Duel invite from a friend
+    sock.on("duel:invited", (p: { from: string; avatarSeed: string; roomCode: string }) => {
+      setState((s) => ({ ...s, duelInvite: { from: p.from, avatarSeed: p.avatarSeed, roomCode: p.roomCode } }));
+    });
+    sock.on("duel:invite-failed", () => {
+      setState((s) => ({ ...s, presenceError: "Friend is not online right now." }));
+    });
     sock.on("room:joined", ({ roomId }: { roomId: string }) => {
       setState((s) => s.isHost ? s : ({ ...s, roomCode: roomId, phase: "waiting", mode: "online", isHost: false }));
     });
@@ -454,6 +503,52 @@ export function useDuel({ player }: UseDuelOptions) {
     };
   }, []);
 
+  const inviteFriend = useCallback((targetPlayerId: string, roomCode: string) => {
+    const sock = socketRef.current;
+    if (!sock) return;
+    sock.emit("duel:invite", { targetPlayerId, roomCode });
+  }, []);
+
+  const dismissInvite = useCallback(() => {
+    setState((s) => ({ ...s, duelInvite: null }));
+  }, []);
+
+  const acceptDuelInvite = useCallback(async (roomCode: string) => {
+    setState((s) => ({ ...s, duelInvite: null }));
+    // joinRoom handles everything
+    const p = playerRef.current;
+    if (!p) return;
+    const sock = ensureSocket();
+    setState((s) => ({ ...s, phase: "waiting", mode: "online", roomCode: null, messages: [], reactions: [], presenceError: null }));
+    const doJoin = () => sock.emit("room:join", { roomId: roomCode, name: p.username, avatarSeed: p.avatarSeed, playerId: p.id });
+    if (identifiedRef.current) { doJoin(); } else {
+      sock.emit("player:identify", { id: p.id, name: p.username, avatarSeed: p.avatarSeed }, () => {
+        identifiedRef.current = true; doJoin();
+      });
+    }
+  }, [ensureSocket]);
+
+  const requestRematch = useCallback(() => {
+    const sock = socketRef.current;
+    if (!sock || !state.roomCode) return;
+    setState((s) => ({ ...s, rematchPending: true, rematchRejected: false, rematchExpired: false }));
+    sock.emit("rematch:request");
+  }, [state.roomCode]);
+
+  const acceptRematch = useCallback(() => {
+    const sock = socketRef.current;
+    if (!sock || !state.roomCode) return;
+    setState((s) => ({ ...s, rematchIncoming: null }));
+    sock.emit("rematch:accept");
+  }, [state.roomCode]);
+
+  const rejectRematch = useCallback(() => {
+    const sock = socketRef.current;
+    if (!sock || !state.roomCode) return;
+    setState((s) => ({ ...s, rematchIncoming: null }));
+    sock.emit("rematch:reject");
+  }, [state.roomCode]);
+
   return {
     ...state,
     quickMatch,
@@ -466,5 +561,11 @@ export function useDuel({ player }: UseDuelOptions) {
     reportMyTyping,
     reportMyFinish,
     reset,
+    requestRematch,
+    acceptRematch,
+    rejectRematch,
+    inviteFriend,
+    dismissInvite,
+    acceptDuelInvite,
   };
 }

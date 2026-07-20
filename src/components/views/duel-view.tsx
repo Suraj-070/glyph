@@ -238,17 +238,21 @@ export function DuelView({ player }: DuelViewProps) {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [duel.messages]);
 
-  // ── BUG FIX: trigger countdown when duelSeed arrives (game:started received)
-  // Previously the waiting spinner never stopped because phase stays "waiting"
-  // until game:started flips it to "playing" — but we need a countdown in between.
-  // Solution: watch duel.phase transition to "playing" and show countdown first.
-  const prevPhase = useRef(duel.phase);
+  // ── Countdown trigger ──
+  // Fires when phase transitions INTO "playing" (initial match or rematch).
+  // prevPhase.current is manually reset to "lobby" on rematch so the
+  // playing→lobby→playing cycle is always detected correctly.
+  const prevPhase = useRef<string>(duel.phase);
+  const prevSeed = useRef<string | null>(duel.duelSeed);
   useEffect(() => {
-    if (prevPhase.current !== "playing" && duel.phase === "playing") {
-      setCountdown(true); // start countdown
+    const phaseJustStarted = prevPhase.current !== "playing" && duel.phase === "playing";
+    const seedChanged = duel.duelSeed !== null && duel.duelSeed !== prevSeed.current;
+    if (phaseJustStarted || (duel.phase === "playing" && seedChanged)) {
+      setCountdown(true);
     }
     prevPhase.current = duel.phase;
-  }, [duel.phase]);
+    prevSeed.current = duel.duelSeed;
+  }, [duel.phase, duel.duelSeed]);
 
   const onCountdownDone = useCallback(() => {
     setCountdown(false);
@@ -875,6 +879,105 @@ export function DuelView({ player }: DuelViewProps) {
         </div>
       </div>
 
+      {/* ── Duel invite from friend ── */}
+      <AnimatePresence>
+        {duel.duelInvite && (
+          <motion.div
+            initial={{ opacity: 0, y: -60, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -60, scale: 0.95 }}
+            transition={{ type: "spring", damping: 22, stiffness: 280 }}
+            className="fixed top-20 left-1/2 -translate-x-1/2 z-50 glass-strong rounded-2xl px-5 py-4 flex items-center gap-4 shadow-xl border border-violet/30 min-w-[300px] max-w-[380px]"
+          >
+            <Avatar seed={duel.duelInvite.avatarSeed} name={duel.duelInvite.from} size={40} />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold truncate">{duel.duelInvite.from}</p>
+              <p className="text-xs text-muted-foreground">challenged you to a duel!</p>
+              <p className="text-[11px] text-violet font-mono mt-0.5">{duel.duelInvite.roomCode}</p>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Button size="sm"
+                className="bg-rose-500/20 text-rose-200 hover:bg-rose-500/30 border border-rose-500/30 px-3 h-8"
+                onClick={() => duel.acceptDuelInvite(duel.duelInvite!.roomCode)}
+              >
+                <Swords className="h-3.5 w-3.5 mr-1" /> Join
+              </Button>
+              <Button size="sm" variant="ghost" className="h-8 px-3 text-xs" onClick={duel.dismissInvite}>
+                Decline
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Rematch incoming toast ── */}
+      <AnimatePresence>
+        {duel.rematchIncoming && (
+          <motion.div
+            initial={{ opacity: 0, y: 60, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 60, scale: 0.95 }}
+            transition={{ type: "spring", damping: 22, stiffness: 280 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 glass-strong rounded-2xl px-5 py-4 flex items-center gap-4 shadow-xl border border-white/10 min-w-[300px]"
+          >
+            <Avatar seed={duel.rematchIncoming.avatarSeed} name={duel.rematchIncoming.from} size={40} />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold truncate">{duel.rematchIncoming.from}</p>
+              <p className="text-xs text-muted-foreground">wants a rematch!</p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                className="bg-teal text-teal-foreground hover:bg-teal/90 px-3"
+                onClick={() => { duel.acceptRematch(); setResult(null); setCountdown(null); prevPhase.current = "lobby"; }}
+              >
+                Accept
+              </Button>
+              <Button size="sm" variant="outline" className="px-3" onClick={duel.rejectRematch}>
+                Decline
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Rematch pending / rejected / expired states ── */}
+      <AnimatePresence>
+        {(duel.rematchPending || duel.rematchRejected || duel.rematchExpired) && !duel.rematchIncoming && (
+          <motion.div
+            initial={{ opacity: 0, y: 60 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 60 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 glass-strong rounded-xl px-5 py-3 flex items-center gap-3 border border-white/10 shadow-xl"
+          >
+            {duel.rematchPending && (
+              <>
+                <span className="flex gap-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-teal animate-bounce" style={{ animationDelay: "0ms" }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-teal animate-bounce" style={{ animationDelay: "150ms" }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-teal animate-bounce" style={{ animationDelay: "300ms" }} />
+                </span>
+                <span className="text-sm text-muted-foreground">Waiting for opponent to accept…</span>
+              </>
+            )}
+            {duel.rematchRejected && (
+              <>
+                <span className="text-rose-300 text-lg">✕</span>
+                <span className="text-sm text-muted-foreground">Opponent declined.</span>
+                <Button size="sm" variant="outline" className="ml-2 text-xs" onClick={duel.reset}>Leave</Button>
+              </>
+            )}
+            {duel.rematchExpired && (
+              <>
+                <span className="text-amber text-lg">⏱</span>
+                <span className="text-sm text-muted-foreground">Rematch request expired.</span>
+                <Button size="sm" variant="outline" className="ml-2 text-xs" onClick={duel.reset}>Leave</Button>
+              </>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <Confetti active={!!result?.open && matchOutcome === "win"} />
 
       <ResultModal
@@ -887,11 +990,17 @@ export function DuelView({ player }: DuelViewProps) {
         rankDelta={result?.rankDelta}
         opponentName={result?.opponentName}
         opponentWon={result?.opponentWon}
-        onRematch={async () => {
+        onRematch={duel.mode === "online" ? () => {
+          // Online rematch: send request to opponent, don't reset yet
+          setResult((r) => r ? { ...r, open: false } : null);
+          duel.requestRematch();
+        } : async () => {
+          // Bot rematch: instant new game
           setResult(null);
           setCountdown(null);
+          prevPhase.current = "lobby";
           duel.reset();
-          await new Promise((r) => setTimeout(r, 50));
+          await new Promise((r) => setTimeout(r, 80));
           duel.quickMatch();
         }}
         onClose={() => { setResult(null); setCountdown(null); duel.reset(); }}
