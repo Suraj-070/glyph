@@ -28,14 +28,14 @@ interface TopbarProps {
 }
 
 const TITLES: Record<AppView, { title: string; sub: string }> = {
-  dashboard: { title: "Dashboard", sub: "Your command center" },
-  classic: { title: "Daily Challenge", sub: "One word. Everyone. Every day." },
-  practice: { title: "Practice Arena", sub: "Unlimited words. Train your edge." },
-  duel: { title: "Real-time Duel", sub: "1v1 live. Same word. No mercy." },
-  party: { title: "Party Mode", sub: "2–20 players. Last solver standing." },
-  profile: { title: "Profile", sub: "Your GLYPH identity" },
-  leaderboard: { title: "Leaderboard", sub: "Global rankings & friends" },
-  howto: { title: "How to Play", sub: "Master the grid" },
+  dashboard:   { title: "Dashboard",        sub: "Your command center" },
+  classic:     { title: "Daily Challenge",  sub: "One word. Everyone. Every day." },
+  practice:    { title: "Practice Arena",   sub: "Unlimited words. Train your edge." },
+  duel:        { title: "Real-time Duel",   sub: "1v1 live. Same word. No mercy." },
+  party:       { title: "Party Mode",       sub: "2–20 players. Last solver standing." },
+  profile:     { title: "Profile",          sub: "Your GLYPH identity" },
+  leaderboard: { title: "Leaderboard",      sub: "Global rankings & friends" },
+  howto:       { title: "How to Play",      sub: "Master the grid" },
 };
 
 export function Topbar({ player, currentStreak, onLogin, onRegister, onLogout }: TopbarProps) {
@@ -59,9 +59,11 @@ export function Topbar({ player, currentStreak, onLogin, onRegister, onLogout }:
   return (
     <header className="sticky top-0 z-30 glass border-b border-white/5">
       <div className="flex items-center gap-3 px-4 sm:px-6 py-3">
-        {/* mobile brand */}
+        {/* mobile brand — logo image */}
         <div className="lg:hidden flex items-center gap-2">
-          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-teal to-violet flex items-center justify-center font-black text-black">G</div>
+          <div className="h-8 w-8 rounded-lg overflow-hidden">
+            <img src="/logo.svg" alt="GLYPH" className="h-full w-full" />
+          </div>
         </div>
 
         <div className="flex-1 min-w-0">
@@ -119,7 +121,6 @@ export function Topbar({ player, currentStreak, onLogin, onRegister, onLogout }:
                   className="absolute right-0 top-full mt-2 w-52 glass-strong rounded-xl border border-white/10 shadow-xl z-50 overflow-hidden"
                   onClick={() => setUserMenuOpen(false)}
                 >
-                  {/* user info */}
                   <div className="px-4 py-3 border-b border-white/5">
                     <div className="font-semibold text-sm truncate">{player.username}</div>
                     {player.email && (
@@ -175,7 +176,6 @@ export function Topbar({ player, currentStreak, onLogin, onRegister, onLogout }:
             </AnimatePresence>
           </div>
         ) : (
-          /* pre-session skeleton */
           <div className="h-9 w-24 rounded-xl glass animate-pulse" />
         )}
       </div>

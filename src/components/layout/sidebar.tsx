@@ -26,14 +26,14 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { view: "dashboard", label: "Dashboard", icon: LayoutDashboard, group: "play" },
-  { view: "classic", label: "Daily Challenge", icon: Target, group: "play" },
-  { view: "duel", label: "Real-time Duel", icon: Swords, group: "play", badge: "LIVE" },
-  { view: "party", label: "Party Mode", icon: Users, group: "play" },
-  { view: "practice", label: "Practice", icon: Dumbbell, group: "play" },
-  { view: "leaderboard", label: "Leaderboard", icon: Trophy, group: "social" },
-  { view: "profile", label: "Profile", icon: User, group: "social" },
-  { view: "howto", label: "How to Play", icon: HelpCircle, group: "social" },
+  { view: "dashboard",   label: "Dashboard",       icon: LayoutDashboard, group: "play" },
+  { view: "classic",     label: "Daily Challenge",  icon: Target,          group: "play" },
+  { view: "duel",        label: "Real-time Duel",   icon: Swords,          group: "play", badge: "LIVE" },
+  { view: "party",       label: "Party Mode",       icon: Users,           group: "play" },
+  { view: "practice",    label: "Practice",         icon: Dumbbell,        group: "play" },
+  { view: "leaderboard", label: "Leaderboard",      icon: Trophy,          group: "social" },
+  { view: "profile",     label: "Profile",          icon: User,            group: "social" },
+  { view: "howto",       label: "How to Play",      icon: HelpCircle,      group: "social" },
 ];
 
 interface SidebarProps {
@@ -55,8 +55,8 @@ export function Sidebar({ player, currentStreak }: SidebarProps) {
     <aside className="hidden lg:flex flex-col w-64 shrink-0 h-screen sticky top-0 glass border-r border-white/5">
       {/* brand */}
       <div className="px-5 py-5 flex items-center gap-2.5">
-        <div className="relative h-9 w-9 rounded-xl bg-gradient-to-br from-teal to-violet flex items-center justify-center font-black text-black text-lg shadow-lg">
-          G
+        <div className="relative h-9 w-9 rounded-xl overflow-hidden shadow-lg">
+          <img src="/logo.svg" alt="GLYPH" className="h-full w-full" />
           <span className="absolute inset-0 rounded-xl ring-1 ring-white/20" />
         </div>
         <div>

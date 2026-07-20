@@ -127,8 +127,8 @@ export function GameShell({ children, player }: GameShellProps) {
             {/* GLYPH wordmark — center */}
             <div className="flex-1 flex justify-center">
               <div className="flex items-center gap-1.5">
-                <div className="h-5 w-5 rounded-md bg-gradient-to-br from-teal to-violet flex items-center justify-center font-black text-black text-[10px]">
-                  G
+                <div className="h-5 w-5 rounded-md overflow-hidden">
+                  <img src="/logo.svg" alt="GLYPH" className="h-full w-full" />
                 </div>
                 <span className="font-black text-sm tracking-tight hidden sm:inline">GLYPH</span>
               </div>

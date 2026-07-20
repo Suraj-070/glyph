@@ -12,6 +12,8 @@ import {
   Sparkles,
   X,
   Hash,
+  Loader2,
+  UserCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -232,6 +234,21 @@ export function DuelView({ player }: DuelViewProps) {
     opponentName?: string;
   } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const [onlineFriends, setOnlineFriends] = useState<Array<{ id: string; username: string; avatarSeed: string; status: string }>>([]);
+  const [invitedIds, setInvitedIds] = useState<Set<string>>(new Set());
+
+  // Reset invite state when leaving waiting room
+  useEffect(() => {
+    if (duel.phase !== "waiting") { setInvitedIds(new Set()); setOnlineFriends([]); }
+  }, [duel.phase]);
+
+  // Load online friends when waiting room is open
+  useEffect(() => {
+    if (duel.phase !== "waiting" || !duel.isHost) return;
+    api<{ friends: Array<{ id: string; username: string; avatarSeed: string; status: string }> }>("/api/friends")
+      .then((r) => setOnlineFriends(r.friends.filter((f) => f.status === "online" || f.status === "idle")))
+      .catch(() => {});
+  }, [duel.phase, duel.isHost]);
 
   // scroll chat to bottom
   useEffect(() => {
@@ -606,6 +623,61 @@ export function DuelView({ player }: DuelViewProps) {
               )}
             </div>
           </div>
+
+          {/* ── Invite friends ── */}
+          <AnimatePresence>
+            {duel.isHost && !opponentJoined && duel.roomCode && onlineFriends.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="mt-5 w-full max-w-xs mx-auto overflow-hidden"
+              >
+                <p className="text-[11px] text-muted-foreground text-center mb-2 uppercase tracking-wider font-semibold">
+                  Invite a friend
+                </p>
+                <div className="space-y-1.5">
+                  {onlineFriends.map((f) => {
+                    const sent = invitedIds.has(f.id);
+                    return (
+                      <motion.div
+                        key={f.id}
+                        initial={{ opacity: 0, x: -8 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="flex items-center gap-2.5 rounded-xl glass px-3 py-2"
+                      >
+                        <Avatar seed={f.avatarSeed} name={f.username} size={30} status={f.status} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold truncate">{f.username}</p>
+                          <p className="text-[10px] text-muted-foreground capitalize">{f.status}</p>
+                        </div>
+                        <button
+                          disabled={sent}
+                          onClick={() => {
+                            if (!duel.roomCode) return;
+                            duel.inviteFriend(f.id, duel.roomCode);
+                            setInvitedIds((prev) => new Set([...prev, f.id]));
+                          }}
+                          className={classNames(
+                            "flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-all shrink-0",
+                            sent
+                              ? "bg-teal/10 text-teal cursor-default"
+                              : "bg-violet/15 text-violet hover:bg-violet/25"
+                          )}
+                        >
+                          {sent ? (
+                            <><UserCheck className="h-3 w-3" /> Invited</>
+                          ) : (
+                            <>Invite</>
+                          )}
+                        </button>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* actions */}
           <div className="mt-6 flex flex-col items-center gap-3">
