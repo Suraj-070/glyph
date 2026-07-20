@@ -66,9 +66,10 @@ export function LeaderboardView({ statsNonce }: LeaderViewProps) {
   const entries = data?.leaderboard ?? [];
   const friends = data?.friends ?? [];
   const myPos = data?.myPosition ?? 0;
+  // FIX: when searching, show all matches. When not searching, skip podium top-3 in the list.
   const filtered = entries.filter((e) => e.username.toLowerCase().includes(query.toLowerCase()));
   const podium = entries.slice(0, 3);
-  const rest = filtered.slice(3);
+  const listEntries = query ? filtered : entries.slice(3);
 
   const sendRequest = async () => {
     if (!addUsername.trim()) return;
@@ -192,10 +193,50 @@ export function LeaderboardView({ statsNonce }: LeaderViewProps) {
 
       {tab === "global" ? (
         <>
-          <div className="relative max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search players…" className="pl-9" />
+          <div className="flex flex-wrap gap-2 items-center">
+            {/* Search bar */}
+            <div className="relative flex-1 min-w-[180px] max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search players…"
+                className="pl-9"
+              />
+            </div>
+            {/* Quick add friend by username */}
+            <div className="flex gap-2 items-center">
+              <div className="relative">
+                <UserPlus className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  value={addUsername}
+                  onChange={(e) => setAddUsername(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && sendRequest()}
+                  placeholder="Add friend by username…"
+                  className="pl-9 w-52"
+                  maxLength={20}
+                />
+              </div>
+              <Button
+                onClick={sendRequest}
+                disabled={addLoading || !addUsername.trim()}
+                size="sm"
+                className="bg-violet/20 text-violet hover:bg-violet/30 border border-violet/30 shrink-0"
+              >
+                {addLoading ? "…" : "Send"}
+              </Button>
+            </div>
           </div>
+          <AnimatePresence>
+            {addMsg && (
+              <motion.p
+                initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                className={classNames("text-xs -mt-2", addMsg.ok ? "text-teal" : "text-rose-300")}
+              >
+                {addMsg.ok ? "✓" : "✕"} {addMsg.text}
+              </motion.p>
+            )}
+          </AnimatePresence>
 
           {podium.length === 3 && !query ? (
             <div className="grid grid-cols-3 gap-3 items-end">
@@ -214,7 +255,7 @@ export function LeaderboardView({ statsNonce }: LeaderViewProps) {
               <div></div>
             </div>
             <div className="max-h-[28rem] overflow-y-auto scroll-glyph">
-              {(rest.length > 0 ? rest : filtered).map((e, i) => {
+              {listEntries.map((e, i) => {
                 const realPos = entries.findIndex((x) => x.id === e.id) + 1;
                 const isFriend = friends.some((f) => f.id === e.id);
                 return (
@@ -382,15 +423,24 @@ function AddFriendButton({ username, onAdded }: { username: string; onAdded: () 
     } catch { /* show nothing */ } finally { setLoading(false); }
   };
 
-  if (done === "friends") return <span className="text-[10px] text-teal">Friends!</span>;
-  if (done === "sent") return <span className="text-[10px] text-muted-foreground flex items-center gap-0.5"><Clock className="h-3 w-3" /> Sent</span>;
+  if (done === "friends") return (
+    <span className="text-[10px] text-teal font-semibold flex items-center gap-0.5">
+      <Check className="h-3 w-3" /> Friends
+    </span>
+  );
+  if (done === "sent") return (
+    <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+      <Clock className="h-3 w-3" /> Sent
+    </span>
+  );
 
   return (
     <button onClick={send} disabled={loading}
-      className="text-[10px] text-violet hover:text-violet/80 flex items-center gap-0.5 ml-auto disabled:opacity-50"
+      className="flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg bg-violet/15 text-violet hover:bg-violet/25 transition-colors disabled:opacity-50 ml-auto"
       title={`Add ${username} as friend`}
     >
       <UserPlus className="h-3 w-3" />
+      <span className="hidden sm:inline">Add</span>
     </button>
   );
 }
