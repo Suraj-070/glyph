@@ -18,7 +18,7 @@ const ROWS = [
 function keyClass(status: TileStatus | undefined): string {
   if (status === "correct") return "tile-correct border-transparent";
   if (status === "present") return "tile-present border-transparent";
-  if (status === "absent") return "tile-absent border-transparent opacity-60";
+  if (status === "absent") return "bg-[#07080a] text-[#1e2028] border-[#12131a]";
   return "bg-white/5 hover:bg-white/10 border-white/10 text-foreground";
 }
 
